@@ -1,0 +1,60 @@
+{
+  "name": "dsh-my-fish",
+  "version": "0.4.2",
+  "description": "My Fish：DSH 本地个人助理，独立记忆、持久任务与可管理权限",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gugupromax/dsh-my-fish.git"
+  },
+  "homepage": "https://github.com/gugupromax/dsh-my-fish#readme",
+  "bugs": {
+    "url": "https://github.com/gugupromax/dsh-my-fish/issues"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js"
+  },
+  "files": [
+    "lib",
+    "bridge/x_client.py",
+    "bridge/transaction_compat.py",
+    "bridge/operation_compat.py",
+    "bridge/post_data.py",
+    "scripts/install-local.mjs",
+    "scripts/install-local.ps1",
+    "scripts/setup.ps1",
+    "requirements.txt",
+    "requirements-lock.txt",
+    "cordis.patch.yml",
+    "README.md",
+    "VALIDATION.md",
+    "LICENSE",
+    "docs",
+    "AGENTS.md",
+    "HANDOFF.md"
+  ],
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.1-rc.3 <0.3.0-0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "node --check lib/index.js && node --check lib/client.js && node --test tests/*.test.mjs",
+    "stage": "node scripts/stage-package.mjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "playwright-core": "1.64.1"
+  }
+}
