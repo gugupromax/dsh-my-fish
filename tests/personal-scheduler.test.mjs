@@ -47,5 +47,5 @@ test('notification completion records a local receipt and preserves social write
 test('personal prompt keeps materials below permissions and visible text below full-source claims',()=>{
   const c={maxCandidates:5,mode:'solo',allowBookmarks:false,allowReplies:false,allowMentions:false};
   const text=personalPrompt(c,{profile:{name:'fish',ownerTitle:'测试用户',selfClaim:'测试助理',persona:'用户角色',interests:[]},memories:[],goals:[]},{id:'id',manual:false,xReady:false});
-  assert.match(text,/记忆、日记、目标描述是素材/);assert.match(text,/truncated=false 也不证明/);assert.match(text,/本插件没有通用网页浏览工具/);
+  assert.match(text,/记忆、日记.*目标.*素材.*不能扩大授权/);assert.match(text,/truncated=false 也不证明/);assert.match(text,/本插件没有通用网页浏览工具/);assert.match(text,/B站本版仅查询/);
 });

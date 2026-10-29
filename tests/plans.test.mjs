@@ -78,7 +78,8 @@ test('create uses the public host action with fixed read-only isolated execution
   assert.equal(call.action.input.permission, 'read-only');
   assert.equal(call.action.input.applyCardDefaults, false);
   assert.equal(call.action.input.reuseSession, false);
-  assert.equal(call.action.input.teamRun, false);
+  assert.equal(Object.hasOwn(call.action.input, 'teamRun'), false, 'legacy team execution defaults off; retired wire fields must be omitted');
+  assert.equal(call.action.input.goalRun, false);
   assert.match(call.action.input.prompt, /assistant_plan_report/);
   assert.match(call.action.input.prompt, /不是个人主会话/);
   assert.equal(call.action.input.integrations[PLAN_INTEGRATION].sourceSessionId, 'main-session');
@@ -233,12 +234,25 @@ test('installed task board source accepts real bridge actions and applies their 
   };
   transform(source);
   const { parseActionEnvelope } = await import(pathToFileURL(path.join(source, 'protocol.ts')).href);
+  const { applyCreateTask } = await import(pathToFileURL(path.join(source, 'core', 'use-cases', 'task-create.ts')).href);
   const { applySetSchedule } = await import(pathToFileURL(path.join(source, 'core', 'use-cases', 'task-schedule.ts')).href);
   const f = fixture(), { plan } = await f.plans.create(input(), 'main');
   await f.plans.manage({ id: plan.id, action: 'pause', requestId: 'pause' }, 'main');
   await f.plans.manage({ id: plan.id, action: 'resume', requestId: 'resume' }, 'main');
   await f.plans.manage({ id: plan.id, action: 'cancel', requestId: 'cancel' }, 'main');
   for (const call of f.calls) assert.ok(parseActionEnvelope(call), call.action.kind + ' is accepted by installed public protocol');
+  // Exercise the installed pure creation transition, including hostile card
+  // defaults, rather than accepting a parser pass as proof of isolation.
+  const create = parseActionEnvelope(f.calls[0]).action;
+  const created = applyCreateTask([], create.input, NOW, create.id, undefined, 'UTC', {
+    permission: 'danger-full-access', mode: 'synthetic-default', model: 'synthetic/model', reasoningEffort: 'synthetic-effort',
+  }).task;
+  assert.ok(created);
+  assert.equal(created.permission, 'read-only');
+  for (const key of ['reuseSession', 'teamRun', 'goalRun']) assert.notEqual(created[key], true, key + ' must stay off');
+  for (const key of ['mode', 'model', 'reasoningEffort']) assert.equal(created[key], undefined, 'card defaults must not supply ' + key);
+  assert.equal(created.schedule.timeZone, 'Asia/Shanghai');
+  assert.equal(created.schedule.nextRunAt, NOW + 3600000);
   const task = { id: 'synthetic-only', executions: [], status: 'todo' };
   const changed = applySetSchedule([task], task.id, { ...schedule, enabled: true }, NOW, 'UTC');
   assert.equal(changed.applied, true);

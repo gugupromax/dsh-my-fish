@@ -1,6 +1,6 @@
 {
   "name": "dsh-my-fish",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "My Fish：DSH 本地个人助理，独立记忆、持久任务与可管理权限",
   "repository": {
     "type": "git",
@@ -30,6 +30,7 @@
     "cordis.patch.yml",
     "README.md",
     "VALIDATION.md",
+    "THIRD_PARTY_NOTICES.md",
     "LICENSE",
     "docs",
     "AGENTS.md",

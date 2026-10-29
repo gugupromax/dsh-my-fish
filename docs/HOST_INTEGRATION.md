@@ -1,6 +1,6 @@
 # My Fish 宿主集成
 
-已核对 DSH Desktop 0.2.1-rc.3 和 taskBoard 0.4.8。源码契约/隔离验证不代表真实 profile 已安装或实际任务已创建。
+已核对 DSH Desktop 0.2.1-rc.3、taskBoard 0.4.8 公开发布源码及本机安装的 0.4.11 纯源码契约。计划创建使用两版共有字段，省略 0.4.11 已移除的 `teamRun`（0.4.8 缺省不开启），保留明确只读、关闭 goal/历史会话复用及不采纳新卡片默认配置。源码契约/隔离验证不代表真实 profile 已安装 My Fish 或实际任务已创建。
 
 ## 主会话
 
@@ -26,7 +26,15 @@ tools.register 注册工具；systemPrompt.context(required:true) 每步重读�
 
 公开仓库仅附带通用角色模板。这里的运行时角色和相关记录来自使用者本地工作区，不属于可上传 GitHub 的示例或发行资料；集成测试使用合成内容。
 
-已校验 20 个工具 Schema；工具是否在当前预设可见、后端是否连接正常分别确认。
+0.4.2基线已校验20个工具；0.5新增social_timeline/social_comments，最新22工具校验结果见VALIDATION.md。工具是否在当前预设可见、后端是否连接正常分别确认。
+
+## 渠道服务（0.5.0）
+
+myFishChannels提供version:1、register(adapter)和catalog(exec?)，仅通过Cordis服务供受信任插件注册，返回精确注销函数，不提供模型/HTTP注册入口。
+
+B站搜索借宿主web_search，其真实参数为{queries:[string]}。先tools.get('web_search',exec.agent)确认可见，再tools.execute({name,arguments,agent,signal,callId,rootCallId,parent:exec.token})；成功读value，isError必须处理。全局注册不等于当前scope可见，不能伪造parent或直接执行definition.execute。
+
+B站上游插件未注册可复用的bili_search等宿主工具；本版独立借鉴其公开只读API流程，不依赖它的安装、账号、人设或timer。详细契约见CHANNELS.md。
 
 ## 会话存在性与恢复（0.4.2）
 

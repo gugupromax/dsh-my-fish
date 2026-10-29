@@ -17,6 +17,7 @@ function harness(options={}){
   data.plans={ok:true,available:true,plans:[],hostTimeZone:'Asia/Shanghai',...options.plans};
   data.permissions={ok:true,policy:{shell:false,fileWrite:false,browserInteract:false,delegation:false,privateTerms:[]},capabilities:{guardAvailable:true},...options.permissions};
   data.workspace={ok:true,path:'C:\\Synthetic\\my-fish',workingDirectory:'C:\\Synthetic\\my-fish\\workspace',migrating:false,canMigrate:true,lastMigration:null,...options.workspace};
+  if(options.channels!==undefined)data.channels=options.channels;
   if(options.config)Object.assign(data.remote.config,options.config);
   const server=structuredClone(data),requests=[];
   let model,plugin,effect,hasEffect=false,cleanup,intervalCallback,intervalDelay,clearedInterval;
@@ -29,8 +30,9 @@ function harness(options={}){
     assert.ok(url.startsWith('/my-fish/api/'),'only local plugin routes');
     const route=url.slice('/my-fish/api/'.length),body=opts.body?JSON.parse(opts.body):undefined;
     requests.push({route,method:opts.method||'GET',body});
+    if(route==='channels'&&options.onChannelsGet)await options.onChannelsGet();
     if(options.failRoute===route)return {ok:false,json:async()=>({ok:false,error:options.error||'连接失败'})};
-    if(body===undefined)return {ok:true,json:async()=>structuredClone(route==='state'?server.remote:route==='plans'?server.plans:route==='permissions'?server.permissions:route==='workspace'?server.workspace:server.assistant)};
+    if(body===undefined)return {ok:true,json:async()=>structuredClone(route==='state'?server.remote:route==='plans'?server.plans:route==='permissions'?server.permissions:route==='workspace'?server.workspace:route==='channels'?server.channels:server.assistant)};
     if(route==='assistant/profile')server.assistant.profile={...server.assistant.profile,...body};
     else if(route==='assistant/settings')server.assistant.settings={...server.assistant.settings,...body};
     else if(route==='config')server.remote.config=body;
@@ -61,7 +63,7 @@ function harness(options={}){
   vm.runInNewContext(source,{window:{__ModuleLoader__:{load:entry=>{plugin=entry.factory(()=>react);}}},Date,JSON,URL,fetch:request,setInterval:(fn,delay)=>{intervalCallback=fn;intervalDelay=delay;return 123;},clearInterval:id=>{clearedInterval=id;}});
   const render=()=>plugin.Section(options.props||{});
   render();
-  if(options.loaded!==false)model={...model,remote:data.remote,assistant:data.assistant,cfg:data.remote.config,profile:data.assistant.profile,settings:data.assistant.settings,plans:data.plans,policy:data.permissions.policy,capabilities:data.permissions.capabilities,workspace:data.workspace,workspaceDraft:{path:data.workspace.path},saved:{cfg:JSON.stringify(data.remote.config),profile:JSON.stringify(data.assistant.profile),settings:JSON.stringify(data.assistant.settings),policy:JSON.stringify(data.permissions.policy),workspaceDraft:JSON.stringify({path:data.workspace.path})}};
+  if(options.loaded!==false)model={...model,remote:data.remote,assistant:data.assistant,cfg:data.remote.config,profile:data.assistant.profile,settings:data.assistant.settings,plans:data.plans,channels:data.channels,policy:data.permissions.policy,capabilities:data.permissions.capabilities,workspace:data.workspace,workspaceDraft:{path:data.workspace.path},saved:{cfg:JSON.stringify(data.remote.config),profile:JSON.stringify(data.assistant.profile),settings:JSON.stringify(data.assistant.settings),policy:JSON.stringify(data.permissions.policy),workspaceDraft:JSON.stringify({path:data.workspace.path})}};
   return {
     render,requests,server,getModel:()=>model,
     setModel:changes=>{model={...model,...changes};},
@@ -75,7 +77,7 @@ function harness(options={}){
 
 test('personal assistant opens with honest empty states and keeps platform setup separate',()=>{
   const solo=flatten(previewTree('solo')),paired=flatten(previewTree('mention'));
-  for(const label of ['现在唤醒','助理消息','正在跟进','还没有新消息','还没有目标','长期记忆','角色名','人设正文','能力与账号','连接体检','允许公开回复','保存 X 设置'])assert.ok(solo.includes(label),label);
+  for(const label of ['现在唤醒','助理消息','正在跟进','还没有新消息','还没有目标','长期记忆','角色名','人设正文','渠道与账号','连接体检','允许公开回复','保存 X 设置'])assert.ok(solo.includes(label),label);
   assert.ok(!solo.includes('接收通知的用户名'));assert.ok(paired.includes('接收通知的用户名'));
   assert.ok(!solo.includes('搜索词，每行一项'));
   const html=previewHTML();
@@ -97,7 +99,7 @@ test('mount loads the personal layer and X status independently without external
   const ui=harness({loaded:false});
   assert.match(flatten(ui.render()),/正在读取个人助理/);
   await ui.mount();
-  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['state','GET'],['assistant','GET'],['plans','GET'],['permissions','GET'],['workspace','GET']]);
+  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['state','GET'],['assistant','GET'],['plans','GET'],['permissions','GET'],['workspace','GET'],['channels','GET']]);
   assert.match(flatten(ui.render()),/My Fish/);
 });
 
@@ -200,7 +202,7 @@ test('X failures stay visible, errors hide entered Cookie values, and sensitive 
 
 test('browser transport stays explicit and writing remains separately controlled',()=>{
   const ui=harness(),text=flatten(ui.render());
-  for(const label of ['接入方式','Cookie + 独立浏览器（推荐）','旧 Cookie 接口（实验）','独立临时浏览器配置','不读取你日常 Chrome 的数据','不会在失败时静默互相回退','已接入：X'])assert.ok(text.includes(label),label);
+  for(const label of ['接入方式','Cookie + 独立浏览器（推荐）','旧 Cookie 接口（实验）','独立临时浏览器配置','不读取你日常 Chrome 的数据','不会在失败时静默互相回退','X 账号设置','接入状态：已实现'])assert.ok(text.includes(label),label);
   for(const label of ['允许收藏书签','允许公开回复','允许公开 @ 用户分享'])assert.equal(namedField(ui.render(),label).props.checked,false);
   ui.change('接入方式','direct_api');
   assert.ok(!flatten(ui.render()).includes('浏览器路径（可选）'));assert.match(flatten(ui.render()),/Python 路径/);
@@ -220,7 +222,7 @@ test('unavailable personal records leave X setup usable without inventing empty 
   const ui=harness({loaded:false,failRoute:'assistant',error:'本地状态文件损坏：memories.json'});
   await ui.mount();
   const tree=ui.render(),text=flatten(tree);
-  assert.match(text,/个人记忆暂不可用/);assert.match(text,/memories.json/);assert.match(text,/能力与账号/);
+  assert.match(text,/个人记忆暂不可用/);assert.match(text,/memories.json/);assert.match(text,/渠道与账号/);
   assert.ok(!text.includes('还没有长期记忆'));assert.ok(!text.includes('还没有新消息'));
   assert.equal(findAll(tree,node=>node.type==='button'&&flatten(node.children)==='现在唤醒').length,0);
   ui.change('AI 账号用户名','test_user');
@@ -581,4 +583,108 @@ test('local and remote migration states disable settings operations until comple
 test('workspace migration is unavailable while the backend reports active work',()=>{
   const ui=harness({workspace:{canMigrate:false,reason:'请先停止正在运行的个人任务'}});ui.change('新工作区绝对路径','D:\\AfterStop');
   assert.match(flatten(ui.render()),/请先停止正在运行的个人任务/);assert.equal(namedButton(ui.render(),'保存并迁移工作区').props.disabled,true);
+});
+
+function channelCard(tree,id){const cards=findAll(tree,node=>node.props['data-channel']===id);assert.equal(cards.length,1,'unique channel: '+id);return cards[0];}
+
+test('Bilibili is an anonymous read-only card with a separate X account group',()=>{
+  const ui=harness(),tree=ui.render(),bili=channelCard(tree,'bilibili'),text=flatten(bili);
+  for(const label of ['B站','无需账号','无需 Cookie','读取评论','公共 BV 链接摘要','宿主搜索未就绪','尚未核验','当前会话可见性：尚未确认','未声明可执行写操作'])assert.ok(text.includes(label),label);
+  assert.ok(!text.includes('账号配置：已配置'));assert.equal(findAll(bili,node=>['input','select','textarea','button'].includes(node.type)).length,0);
+  const groups=findAll(tree,node=>node.props['data-channel-account']);assert.deepEqual(groups.map(node=>node.props['data-channel-account']),['x']);
+  assert.equal(namedField(groups[0],'auth_token').props.type,'password');assert.equal(namedField(groups[0],'允许公开回复').props.checked,false);
+  assert.deepEqual(ui.requests,[]);
+});
+
+test('newly registered providers appear automatically without inheriting X account fields',async()=>{
+  const ui=harness(),future={id:'synthetic-provider',name:'示例公共渠道',installed:true,implemented:true,available:true,configured:false,accountRequired:false,connection:{state:'unchecked',scope:'公开摘要'},currentSessionVisible:false,reads:['read'],actions:{bookmark:{supported:true,enabled:false,liveVerified:false}},scope:'仅示例公开数据'};
+  ui.server.channels.platforms.push(future);await ui.click('刷新渠道状态');
+  const card=channelCard(ui.render(),future.id),text=flatten(card);
+  assert.match(text,/示例公共渠道/);assert.match(text,/当前会话可见性：当前不可见/);assert.match(text,/收藏：已支持 · 开关关闭 · 真实操作未验证/);
+  assert.equal(findAll(card,node=>['input','select','textarea'].includes(node.type)).length,0);
+  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['channels','GET']]);
+});
+
+test('runtime readiness, account configuration, connection scope and session visibility remain distinct',()=>{
+  const base=previewData().channels.platforms[0];
+  for(const [connection,visible,expected] of [
+    [{state:'unchecked',checkedAt:null,scope:'尚未读取身份'},null,'尚未核验'],
+    [{state:'verified',checkedAt:123,scope:'仅身份接口'},true,'最近连接核验通过'],
+    [{state:'failed',checkedAt:123,scope:'仅身份接口',message:'合成连接失败'},false,'连接失败'],
+    [{state:'unavailable',checkedAt:null,scope:'运行依赖缺失'},null,'连接不可用']
+  ]){
+    const ui=harness({channels:{ok:true,platforms:[{...base,configured:true,available:true,connection,currentSessionVisible:visible}]}}),text=flatten(channelCard(ui.render(),'x'));
+    assert.match(text,/适配服务已就绪/);assert.match(text,/账号配置：已配置/);assert.ok(text.includes('连接核验：'+expected));
+    assert.ok(text.includes('连接核验范围：'+connection.scope));
+    assert.ok(text.includes('当前会话可见性：'+(visible===true?'已确认可见':visible===false?'当前不可见':'尚未确认')));
+    assert.match(text,/真实操作未验证/);assert.ok(!text.includes('真实操作已验证'));
+  }
+});
+
+test('unimplemented directory entries never claim executable reads or actions',()=>{
+  const ui=harness({channels:{ok:true,platforms:[{id:'future',name:'未来渠道',installed:false,implemented:false,available:false,configured:false,accountRequired:true,connection:{state:'unavailable'},currentSessionVisible:null,reads:['search','read'],actions:{publish:{supported:true,enabled:true,liveVerified:true}},unavailableReason:'尚未提供适配器'}]}}),text=flatten(channelCard(ui.render(),'future'));
+  assert.match(text,/尚未接入/);assert.match(text,/尚未提供适配器/);assert.match(text,/读取能力：渠道尚未接入，不可执行/);assert.match(text,/公开发布：渠道尚未接入，不可执行/);
+  assert.ok(!text.includes('已支持'));assert.ok(!text.includes('真实操作已验证'));assert.ok(!text.includes('搜索（'));
+});
+
+test('read availability supports booleans and operation metadata without asserting real execution',()=>{
+  for(const search of [false,{available:false,currentSessionVisible:null,reason:'宿主公共搜索未加载'}]){
+    const bili={...previewData().channels.platforms[1],readAvailability:{search,read:true,comments:{available:true,currentSessionVisible:null}}};
+    const ui=harness({channels:{ok:true,platforms:[bili]}}),text=flatten(channelCard(ui.render(),'bilibili'));
+    assert.match(text,/搜索（当前不可用）/);assert.match(text,/宿主搜索未就绪/);assert.match(text,/读取单条内容（运行条件就绪）/);assert.match(text,/读取评论（运行条件就绪）/);
+    assert.match(text,/读取实测：验证状态未声明/);if(typeof search==='object')assert.match(text,/宿主公共搜索未加载/);
+  }
+});
+
+test('unsupported action metadata cannot appear as enabled or live verified',()=>{
+  const base=previewData().channels.platforms[1],ui=harness({channels:{ok:true,platforms:[{...base,actions:{reply:{supported:false,enabled:true,liveVerified:true},like:{supported:false,enabled:false,liveVerified:false}}}]}}),text=flatten(channelCard(ui.render(),'bilibili'));
+  assert.match(text,/公开回复：尚未支持/);assert.match(text,/点赞：尚未支持/);assert.ok(!text.includes('开关已开启'));assert.ok(!text.includes('真实操作已验证'));
+});
+
+test('a failed channel refresh preserves cached cards, X credentials state and unsaved account drafts',async()=>{
+  const options={failRoute:'channels',error:'渠道目录暂时离线'},ui=harness(options),cached=JSON.stringify(ui.getModel().channels);
+  ui.change('AI 账号用户名','synthetic_draft');ui.change('auth_token','synthetic-secret');await ui.click('刷新渠道状态');
+  assert.equal(JSON.stringify(ui.getModel().channels),cached);assert.equal(namedField(ui.render(),'AI 账号用户名').props.value,'synthetic_draft');assert.equal(namedField(ui.render(),'auth_token').props.value,'synthetic-secret');
+  assert.match(flatten(ui.render()),/渠道目录暂不可用：渠道目录暂时离线/);channelCard(ui.render(),'bilibili');
+  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['channels','GET']]);
+  options.failRoute=null;await ui.click('刷新渠道状态');assert.equal(ui.getModel().channelsError,'');assert.equal(ui.getModel().channelsLoading,false);
+});
+
+test('initial channel failure leaves personal records and X account settings usable',async()=>{
+  const ui=harness({loaded:false,failRoute:'channels',error:'旧版没有渠道目录接口'});await ui.mount();
+  assert.match(flatten(ui.render()),/长期记忆/);assert.match(flatten(ui.render()),/渠道目录暂不可用/);assert.match(flatten(ui.render()),/未确认的渠道不会显示为已接入/);
+  assert.equal(ui.getModel().channels,null);assert.equal(namedButton(ui.render(),'现在唤醒').props.disabled,false);assert.equal(namedField(ui.render(),'AI 账号用户名').props.disabled,false);
+  assert.equal(findAll(ui.render(),node=>node.props['data-channel']).length,0);assert.ok(ui.requests.every(row=>row.method==='GET'));
+});
+
+test('a slow channel directory does not delay the personal view or its settings',async()=>{
+  let finish;const gate=new Promise(resolve=>{finish=resolve;}),ui=harness({loaded:false,onChannelsGet:()=>gate});
+  await ui.mount();assert.match(flatten(ui.render()),/长期记忆/);assert.equal(namedField(ui.render(),'角色名').props.disabled,false);assert.equal(namedButton(ui.render(),'现在唤醒').props.disabled,false);
+  assert.equal(ui.getModel().channels,null);assert.equal(ui.getModel().channelsLoading,true);assert.equal(namedButton(ui.render(),'刷新渠道状态').props.disabled,true);
+  finish();await new Promise(resolve=>setImmediate(resolve));channelCard(ui.render(),'bilibili');assert.equal(ui.getModel().channelsLoading,false);ui.unmount();
+});
+
+test('polling shares a pending channel read and ignores its result after unmount',async()=>{
+  let finish;const gate=new Promise(resolve=>{finish=resolve;}),ui=harness({loaded:false,onChannelsGet:()=>gate});
+  await ui.mount();await ui.poll();assert.equal(ui.requests.filter(row=>row.route==='channels').length,1);
+  ui.unmount();finish();await new Promise(resolve=>setImmediate(resolve));assert.equal(ui.getModel().channels,null);assert.equal(ui.getModel().channelsError,'');
+});
+
+test('malformed channel responses retain the last valid directory instead of inventing support',async()=>{
+  for(const malformed of [{}, {platforms:{}}, {platforms:[{id:'broken'}]}, {platforms:[{id:'same',name:'甲'},{id:'same',name:'乙'}]}]){
+    const ui=harness(),cached=JSON.stringify(ui.getModel().channels);ui.server.channels=malformed;await ui.click('刷新渠道状态');
+    assert.equal(JSON.stringify(ui.getModel().channels),cached);assert.match(flatten(ui.render()),/渠道目录返回格式无效/);assert.equal(ui.getModel().channelsLoading,false);
+  }
+});
+
+test('empty channel catalogs and channel errors do not change account permissions or cause platform calls',async()=>{
+  const ui=harness(),before=JSON.stringify(ui.server.remote.config);ui.server.channels={ok:true,platforms:[]};await ui.click('刷新渠道状态');
+  assert.match(flatten(ui.render()),/当前没有已注册渠道/);assert.equal(JSON.stringify(ui.server.remote.config),before);assert.equal(namedField(ui.render(),'允许公开回复').props.checked,false);
+  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['channels','GET']]);
+});
+
+test('channel error text hides credential assignments and refreshes no personal or platform routes',async()=>{
+  const ui=harness({failRoute:'channels',error:'cookie=synthetic-canary authorization=synthetic-other'});await ui.click('刷新渠道状态');
+  const text=flatten(ui.render());assert.ok(!text.includes('synthetic-canary'));assert.ok(!text.includes('synthetic-other'));assert.match(text,/凭据已隐藏/);
+  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['channels','GET']]);
 });
