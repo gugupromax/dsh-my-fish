@@ -26,6 +26,12 @@ test('outbound review rejects secrets, encoded private phrases and local paths w
   assert.equal(policy.guard(call('web_search',{query:'public release notes'})),undefined);
   assert.equal(policy.guard(call('social_action',{text:'synthetic private phrase'}))?.includes('私密词'),true);
 });
+
+test('ordinary HTTPS source links are not Windows drive paths while real and encoded private paths stay blocked',t=>{
+  const {policy}=fixture(t);
+  for(const [name,args] of [['social_read',{platform:'bilibili',reference:'https://www.bilibili.com/video/BV1GJ411x7h7/'}],['web_fetch',{url:'https://example.test/reading'}],['social_read',{platform:'x',reference:'https://x.com/example/status/123456'}]])assert.equal(policy.guard(call(name,args)),undefined);
+  for(const value of ['E:\\example\\private.txt','E:/example/private.txt','\\\\server\\share\\private.txt','/users/example/private.txt','/home/example/private.txt','E%253A%252Fexample%252Fprivate.txt','https://example.test/?path=E%3A%2Fexample%2Fprivate.txt'])assert.match(policy.guard(call('web_search',{query:value})),/路径/);
+});
 test('runtime ownership propagates policy through nested children while a forged durable parent does not claim an unrelated chat',t=>{
   const {store}=fixture(t),main=agent('main'),child=agent('child'),grandchild=agent('grandchild'),ordinary=agent('ordinary');
   ordinary.session.parentId='main';const owners=new Map([[child,main],[grandchild,child]]),all=[main,child,grandchild,ordinary];

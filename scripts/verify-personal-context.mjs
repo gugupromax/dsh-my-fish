@@ -7,6 +7,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Store} from '../lib/store.js';
 import {AssistantStore} from '../lib/assistant-store.js';
+import {CompanionStore} from '../lib/companion-store.js';
 import {registerPersonalContext} from '../lib/assistant-context.js';
 
 const hostRoot=process.argv[2]||'D:/Program Files/DeepSeek Harness/resources/app.asar/dsh/node_modules';
@@ -21,12 +22,13 @@ try {
   const store=new Store(temporaryRoot),assistant=new AssistantStore(store).initialize();
   assistant.saveProfile({name:'HOST_PERSONA_SENTINEL',replyStyle:'concise',emojiStyle:'none'});
   store.saveState({...store.state(),sessionId:'synthetic-personal-session',activeRun:{id:'synthetic-active-run',query:'host-memory-probe'}});
+  const companion=new CompanionStore(store),interest=companion.start({title:'SYNTHETIC_CONTINUING_INTEREST',openQuestion:'A synthetic unanswered question'},'synthetic-personal-session');
   const memory=assistant.remember({text:'host-memory-probe original-synthetic-value',category:'fact',source:'Synthetic local host integration fixture'});
   assistant.remember({text:'host-memory-probe EXPIRED_SYNTHETIC_VALUE',category:'fact',source:'Synthetic expired fixture',expiresAt:Date.now()-1});
   const ctx=new Context();
   const promptFiber=ctx.plugin(SystemPrompt,{includeHarnessIdentity:false});fibers.push(promptFiber);
   await promptFiber;
-  const personalFiber=ctx.plugin({name:'synthetic-personal-context-verifier',apply:child=>registerPersonalContext(child,store,assistant)});fibers.push(personalFiber);
+  const personalFiber=ctx.plugin({name:'synthetic-personal-context-verifier',apply:child=>registerPersonalContext(child,store,assistant,companion)});fibers.push(personalFiber);
   await personalFiber;
   // Optional injection is a nested fiber; allow its already-scheduled activation to settle.
   await new Promise(resolve=>setImmediate(resolve));
@@ -39,11 +41,13 @@ try {
   assert.ok(!ordinary.includes('HOST_PERSONA_SENTINEL'));
   assert.ok(!ordinary.includes('original-synthetic-value'));
   assert.ok(!ordinary.includes('说话风格：简短'));
+  assert.ok(!ordinary.includes('SYNTHETIC_CONTINUING_INTEREST'));
   const initial=visible(await assemble('synthetic-personal-session'));
   assert.ok(initial.includes('HOST_PERSONA_SENTINEL'));
   assert.ok(initial.includes('original-synthetic-value'));
   assert.ok(initial.includes('说话风格：简短'));assert.ok(initial.includes('表情符号：不使用'));
   assert.ok(!initial.includes('EXPIRED_SYNTHETIC_VALUE'));
+  assert.ok(initial.includes('SYNTHETIC_CONTINUING_INTEREST'));assert.ok(initial.includes('不要把每次聊天都写成目标'));
   assistant.remember({id:memory.id,text:'host-memory-probe corrected-synthetic-value'});
   assistant.saveProfile({replyStyle:'formal'});
   const corrected=visible(await assemble('synthetic-personal-session'));
@@ -61,6 +65,7 @@ try {
     const forgotten=visible(await assemble('synthetic-personal-session'));
     assert.ok(!forgotten.includes('corrected-synthetic-value'));
     assert.ok(!forgotten.includes('original-synthetic-value'));
+    companion.setStatus(interest.id,'paused');assert.ok(!visible(await assemble('synthetic-personal-session')).includes('SYNTHETIC_CONTINUING_INTEREST'));
   } finally {
     await disposeSuppression();await disposeComplete();
   }
@@ -76,4 +81,4 @@ try {
   assert.ok(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative),'Temporary cleanup target must remain under the OS temporary directory');
   fs.rmSync(temporaryRoot,{recursive:true,force:true});
 }
-if(cleanupComplete)console.log(JSON.stringify({hostPersonalContext:'passed',ordinarySessionIsolation:'passed',styleIsolationAndRefresh:'passed',expiredMemoryExclusion:'passed',currentMemory:'passed',correctionRefresh:'passed',forgetRefresh:'passed',completePresetWithSuppression:'passed',disposal:'passed',temporaryDataCleanup:'passed'}));
+if(cleanupComplete)console.log(JSON.stringify({hostPersonalContext:'passed',ordinarySessionIsolation:'passed',companionIsolationAndPauseRefresh:'passed',styleIsolationAndRefresh:'passed',expiredMemoryExclusion:'passed',currentMemory:'passed',correctionRefresh:'passed',forgetRefresh:'passed',completePresetWithSuppression:'passed',disposal:'passed',temporaryDataCleanup:'passed'}));

@@ -15,9 +15,9 @@ try {
   const store=new Store(),sessionId='synthetic-sdk-personal-session';
   store.saveState({...store.state(),sessionId});
   const values=await import(pathToFileURL(path.join(root,'@deepseek-ai/dsh-util-values/lib/index.js')).href);
-  for(const name of ['x_whale_status','social_status','assistant_context','assistant_capabilities','assistant_plan']){
+  for(const name of ['x_whale_status','social_status','assistant_context','assistant_capabilities','assistant_plan','assistant_companion']){
     const definition=definitions.find(d=>d.name===name);if(!definition)continue;
-    const status=await definition.execute(name==='assistant_plan'?{action:'list'}:{},{agent:{id:sessionId,session:{id:sessionId}},signal:new AbortController().signal});
+    const status=await definition.execute(['assistant_plan','assistant_companion'].includes(name)?{action:'list'}:{},{agent:{id:sessionId,session:{id:sessionId}},signal:new AbortController().signal});
     values.snapshotJsonValue(status);statuses.push(name);
   }
   console.log(JSON.stringify({hostSchema:'passed',hostStatusJson:'passed',registeredTools:names,statusTools:statuses},null,2));

@@ -90,7 +90,7 @@ const draft = requestId => ({ action: 'create', requestId, title: '受控测试�
 
 test('temporary snooze is a trusted settings-only operation with strict presets and no new model tool', async t => {
   const f=fixture(t),before=JSON.stringify(f.store.state());
-  assert.equal(f.tools.has('assistant_snooze'),false);assert.equal(f.tools.size,22);
+  assert.equal(f.tools.has('assistant_snooze'),false);assert.equal(f.tools.size,23);
   for(const prefix of ['/my-fish/api','/x-whale/api']){
     const paused=await f.http(prefix,'POST','assistant/snooze',{preset:'two-hours'});
     assert.equal(paused.status,200);assert.equal(paused.body.settings.enabled,false);assert.ok(paused.body.settings.snoozeUntil>Date.now());

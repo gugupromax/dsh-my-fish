@@ -26,7 +26,17 @@ tools.register 注册工具；systemPrompt.context(required:true) 每步重读�
 
 公开仓库仅附带通用角色模板。这里的运行时角色和相关记录来自使用者本地工作区，不属于可上传 GitHub 的示例或发行资料；集成测试使用合成内容。
 
-0.4.2基线已校验20个工具；0.5新增social_timeline/social_comments，最新22工具校验结果见VALIDATION.md。工具是否在当前预设可见、后端是否连接正常分别确认。
+0.4.2基线已校验20个工具；0.5新增social_timeline/social_comments至22个，0.6.0再加assistant_companion共23个。实际SDK工具Schema与6种状态JSON校验见VALIDATION.md；注册不证明当前预设可见或模型实际调用成功。
+
+## 陪伴与实时消息（0.6.0）
+
+ctx.on('session/event',(session,event)=>...,{global:true})观察已提交的未来事件；event为{type,seq,time,data}。user/message的data就是宿主createUserMessage创建的消息，含id/source/content，time为宿主提交时间。只处理当前固定主会话，不调用已弃用的snapshotEvents/eventAt/ownEvents回扫历史。
+
+sessionController.prompt统一设置source={kind:'user',rpcId:requestId}，所以kind不是人类身份保证。所有My Fish程序投递先登记请求ID，并以my-fish-chat/wake固定前缀作补充排除，避免有界索引轮换后仍待消费的内部消息被记成用户态度。捕获文字先检查完整敏感内容再截断；模型只能引用已记录messageId和原文子串。
+
+可信companion/chat通过原sessionController.prompt续聊，持久记录请求指纹、主会话和prepared/queued/unknown状态；unknown不重试。恢复失效主会话时核对companionChatPending的原归属，只中断旧投递，不重发。
+
+Social成功读取回调在主会话生成有范围的资料回执；普通会话、独立计划、检查/写操作、空结果和失败不进入私人兴趣线。新工具权限仅主会话开放。安装版verify-companion使用真实Cordis/SessionStore/createUserMessage与合成事件验证这些契约，模型及网络调用数为零。
 
 ## 渠道服务（0.5.0）
 

@@ -70,7 +70,7 @@ test('public staging excludes runtime data and replaces stale output rather than
   const project=fixture(t);
   const write=(relative,value='synthetic')=>{const file=path.join(project,relative);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,value);};
   write('package.json','{"name":"dsh-my-fish"}');write('lib/main.js');write('lib/credentials.json');write('lib/.env.local');write('recovery/private.txt');write('node_modules/private.txt');write('docs/README.md');write('scripts/cache.log');
-  write('lib/my-fish-location.json');write('lib/my-fish-migration.json');write('lib/.operation.lock');write('lib/.my-fish-migration-synthetic/private.json');
+  write('lib/my-fish-location.json');write('lib/my-fish-migration.json');write('lib/.operation.lock');write('lib/.my-fish-migration-synthetic/private.json');write('lib/companion.json');
   assert.deepEqual(packageFiles(project).map(f=>f.split(path.sep).join('/')).sort(),['docs/README.md','lib/main.js','package.json']);
   const target=stagePackage(project);write('dist/dsh-my-fish/stale.json');stagePackage(project);
   assert.equal(fs.existsSync(path.join(target,'stale.json')),false);
@@ -83,6 +83,6 @@ test('package, lockfile and Cordis identity agree on the release name',()=>{
   const pkg=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
   const lock=JSON.parse(fs.readFileSync(new URL('../package-lock.json',import.meta.url),'utf8'));
   assert.equal(pkg.name,'dsh-my-fish');assert.equal(lock.name,pkg.name);assert.equal(lock.packages[''].name,pkg.name);
-  assert.equal(pkg.version,'0.5.3');assert.equal(lock.version,pkg.version);assert.equal(lock.packages[''].version,pkg.version);
+  assert.equal(pkg.version,'0.6.0');assert.equal(lock.version,pkg.version);assert.equal(lock.packages[''].version,pkg.version);
   assert.match(fs.readFileSync(new URL('../cordis.patch.yml',import.meta.url),'utf8'),/id: dsh-my-fish\s+name: dsh-my-fish/);
 });

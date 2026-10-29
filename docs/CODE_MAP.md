@@ -1,6 +1,8 @@
 # My Fish 代码地图
 
-当前 0.5.3，包和宿主/前端模块 dsh-my-fish。
+当前 0.6.0，包和宿主/前端模块 dsh-my-fish。
+
+陪伴层：companion-store.js保存连续兴趣、真实读回执与用户原话；companion-tools.js注册主会话工具；companion-evidence.js在Social成功读取边界生成资料证据；companion-context.js追加日常交流/连续探索指引；companion-runtime.js负责可信设置续聊幂等与未来live事件捕获。均不改原profile或权限。
 
 | 文件 | 职责 |
 | --- | --- |

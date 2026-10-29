@@ -3,7 +3,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 
 export const PUBLIC_ENTRIES=['lib','scripts','tests','docs','.github','AGENTS.md','HANDOFF.md','bridge/x_client.py','bridge/transaction_compat.py','bridge/operation_compat.py','bridge/post_data.py','package.json','package-lock.json','cordis.patch.yml','requirements.txt','requirements-lock.txt','README.md','VALIDATION.md','LICENSE','THIRD_PARTY_NOTICES.md','.gitignore'];
-const excluded=new Set(['node_modules','.venv','__pycache__','recovery','releases','dist','.npm-cache','.pack-cache','.git','user-data','browser-profiles','credentials.json','config.json','state.json','my-fish-location.json','my-fish-migration.json','.operation.lock','.env']);
+const excluded=new Set(['node_modules','.venv','__pycache__','recovery','releases','dist','.npm-cache','.pack-cache','.git','user-data','browser-profiles','credentials.json','companion.json','config.json','state.json','my-fish-location.json','my-fish-migration.json','.operation.lock','.env']);
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 
 export function packageFiles(projectRoot) {

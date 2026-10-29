@@ -19,6 +19,7 @@ tmp*/
 user-data/
 browser-profiles/
 credentials.json
+companion.json
 config.json
 state.json
 my-fish-location.json

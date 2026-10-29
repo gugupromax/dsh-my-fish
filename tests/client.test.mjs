@@ -18,6 +18,7 @@ function harness(options={}){
   data.permissions={ok:true,policy:{shell:false,fileWrite:false,browserInteract:false,delegation:false,privateTerms:[]},capabilities:{guardAvailable:true},...options.permissions};
   data.workspace={ok:true,path:'C:\\Synthetic\\my-fish',workingDirectory:'C:\\Synthetic\\my-fish\\workspace',migrating:false,canMigrate:true,lastMigration:null,...options.workspace};
   if(options.channels!==undefined)data.channels=options.channels;
+  if(options.companion!==undefined)data.companion=options.companion;
   if(options.config)Object.assign(data.remote.config,options.config);
   const server=structuredClone(data),requests=[];
   const RuntimeDate=options.now===undefined?Date:class extends Date{constructor(...args){super(...(args.length?args:[options.now]));}static now(){return options.now;}};
@@ -35,8 +36,10 @@ function harness(options={}){
     if(route==='assistant'&&body===undefined&&options.onAssistantGet)await options.onAssistantGet();
     if(route==='channels/check'&&options.onChannelCheck)await options.onChannelCheck(body);
     if(route==='assistant/snooze'&&options.onSnooze)await options.onSnooze(body);
+    if(route==='companion'&&body===undefined&&options.onCompanionGet)await options.onCompanionGet();
+    if(route==='companion/chat'&&options.onCompanionChat)await options.onCompanionChat(body);
     if(options.failRoute===route)return {ok:false,json:async()=>({ok:false,error:options.error||'连接失败'})};
-    if(body===undefined)return {ok:true,json:async()=>structuredClone(route==='state'?server.remote:route==='plans'?server.plans:route==='permissions'?server.permissions:route==='workspace'?server.workspace:route==='channels'?server.channels:server.assistant)};
+    if(body===undefined)return {ok:true,json:async()=>structuredClone(route==='state'?server.remote:route==='plans'?server.plans:route==='permissions'?server.permissions:route==='workspace'?server.workspace:route==='channels'?server.channels:route==='companion'?server.companion:server.assistant)};
     if(route==='assistant/profile')server.assistant.profile={...server.assistant.profile,...body};
     else if(route==='assistant/settings')server.assistant.settings={...server.assistant.settings,...body};
     else if(route==='assistant/snooze'){
@@ -45,6 +48,9 @@ function harness(options={}){
       return {ok:true,json:async()=>({ok:true,settings:structuredClone(server.assistant.settings),note:'临时免打扰已更新，原作息保持'})};
     }
     else if(route==='config')server.remote.config=body;
+    else if(route==='companion/chat'){const result=options.companionResult||{ok:true,queued:true,sessionId:server.remote.sessionId||'companion-main',requestId:body.requestId,note:'已交给同一主会话；真实读取尚未完成'};if(typeof result.sessionId==='string')server.remote.sessionId=result.sessionId;return {ok:true,json:async()=>structuredClone(result)};}
+    else if(route==='companion/topic')server.companion.threads=server.companion.threads.map(row=>row.id===body.id?{...row,status:body.status}:row);
+    else if(route==='companion/forget')server.companion.threads=server.companion.threads.filter(row=>row.id!==body.id);
     else if(route==='credentials')server.remote.hasCredentials=true;
     else if(route==='permissions')server.permissions.policy=body;
     else if(route==='channels/check'){
@@ -78,7 +84,7 @@ function harness(options={}){
   vm.runInNewContext(source,{window:{__ModuleLoader__:{load:entry=>{plugin=entry.factory(()=>react);}}},Date:RuntimeDate,JSON,URL,fetch:request,setInterval:(fn,delay)=>{intervalCallback=fn;intervalDelay=delay;return 123;},clearInterval:id=>{clearedInterval=id;}});
   const render=()=>plugin.Section(options.props||{});
   render();
-  if(options.loaded!==false)model={...model,remote:data.remote,assistant:data.assistant,cfg:data.remote.config,profile:data.assistant.profile,settings:data.assistant.settings,plans:data.plans,channels:data.channels,policy:data.permissions.policy,capabilities:data.permissions.capabilities,workspace:data.workspace,workspaceDraft:{path:data.workspace.path},saved:{cfg:JSON.stringify(data.remote.config),profile:JSON.stringify(data.assistant.profile),settings:JSON.stringify(data.assistant.settings),policy:JSON.stringify(data.permissions.policy),workspaceDraft:JSON.stringify({path:data.workspace.path})}};
+  if(options.loaded!==false)model={...model,remote:data.remote,assistant:data.assistant,companion:data.companion,cfg:data.remote.config,profile:data.assistant.profile,settings:data.assistant.settings,plans:data.plans,channels:data.channels,policy:data.permissions.policy,capabilities:data.permissions.capabilities,workspace:data.workspace,workspaceDraft:{path:data.workspace.path},saved:{cfg:JSON.stringify(data.remote.config),profile:JSON.stringify(data.assistant.profile),settings:JSON.stringify(data.assistant.settings),policy:JSON.stringify(data.permissions.policy),workspaceDraft:JSON.stringify({path:data.workspace.path})}};
   return {
     render,requests,server,getModel:()=>model,
     setModel:changes=>{model={...model,...changes};},
@@ -93,7 +99,7 @@ function harness(options={}){
 
 test('personal assistant opens with honest empty states and keeps platform setup separate',()=>{
   const solo=flatten(previewTree('solo')),paired=flatten(previewTree('mention'));
-  for(const label of ['现在唤醒','助理消息','正在跟进','还没有新消息','还没有目标','长期记忆','角色名','人设正文','渠道与账号','检查连接与权限','允许公开回复','保存 X 设置'])assert.ok(solo.includes(label),label);
+  for(const label of ['现在唤醒','留给你的话','正在跟进','还没有新消息','还没有目标','长期记忆','角色名','人设正文','渠道与账号','检查连接与权限','允许公开回复','保存 X 设置'])assert.ok(solo.includes(label),label);
   assert.ok(!solo.includes('接收通知的用户名'));assert.ok(paired.includes('接收通知的用户名'));
   assert.ok(!solo.includes('搜索词，每行一项'));
   const html=previewHTML();
@@ -115,7 +121,7 @@ test('mount loads the personal layer and X status independently without external
   const ui=harness({loaded:false});
   assert.match(flatten(ui.render()),/正在读取个人助理/);
   await ui.mount();
-  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['state','GET'],['assistant','GET'],['plans','GET'],['permissions','GET'],['workspace','GET'],['channels','GET']]);
+  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['state','GET'],['assistant','GET'],['plans','GET'],['permissions','GET'],['workspace','GET'],['channels','GET'],['companion','GET']]);
   assert.match(flatten(ui.render()),/My Fish/);
 });
 
@@ -128,6 +134,116 @@ test('manual wake works without X identity and sends the one-time task instead o
   assert.equal(namedField(tree,'本次任务（可选）').props.value,'');
   assert.match(flatten(tree),/尚未执行完成/);
   assert.ok(!ui.requests.some(row=>['run','diagnose'].includes(row.route)));
+});
+
+const companionTopicId='11111111-1111-4111-8111-111111111111';
+function companionFixture(){return {ok:true,receipts:[],threads:[{id:companionTopicId,title:'为什么同一段话会有两种理解',currentThought:'我倾向于先看原话，再比较评论里的解释。',openQuestion:'分歧出在语境还是措辞？',nextQuestion:'再找一段有上下文的原文。',status:'active',origin:'fish',createdAt:1,updatedAt:2,revision:1,userPositions:[{messageId:'synthetic-user-message',quote:'我觉得要看上下文',at:1}],latestSources:[{id:'synthetic-receipt',title:'合成公开视频资料',url:'https://www.bilibili.com/video/BV1GJ411x7h7/',platform:'bilibili',operation:'read',scope:'仅公开视频简介，不含音视频',readAt:2,truncated:true}],revisions:[{before:'我最初只注意到措辞。',after:'现在觉得上下文也很关键。',reason:'新读到的简介补充了背景。',sourceIds:['synthetic-receipt'],at:2}],episodes:[]}]};}
+function companionCard(tree,id=companionTopicId){const rows=findAll(tree,node=>node.props['data-companion-topic']===id);assert.equal(rows.length,1);return rows[0];}
+
+test('companion content precedes folded work settings without invented interests or platform activity',()=>{
+  const tree=previewTree(),text=flatten(tree);
+  assert.ok(text.indexOf('最近在琢磨')<text.indexOf('工作区'));assert.match(text,/还没有正在琢磨的话题/);assert.match(text,/还不能观看视频或读取音频/);
+  for(const title of ['工作区','需要帮忙时','定时计划','正在跟进','渠道与账号']){
+    const rows=findAll(tree,node=>node.type==='details'&&node.children?.[0]?.type==='summary'&&flatten(node.children[0])===title);assert.equal(rows.length,1,title);assert.notEqual(rows[0].props.open,true);
+  }
+  assert.equal(findAll(tree,node=>node.type==='button'&&flatten(node)==='和助理聊天').length,1);
+  assert.equal(findAll(tree,node=>node.props['data-companion-topic']).length,0);assert.match(text,/留给你的话/);assert.ok(!text.includes('QQ已连接'));
+});
+
+test('companion topics render genuine thoughts, exact user quotes and bounded source scope safely',()=>{
+  const data=companionFixture();data.threads[0].latestSources.push({title:'不安全链接',url:'javascript:alert(1)',scope:'未使用'});
+  const ui=harness({companion:data}),card=companionCard(ui.render()),text=flatten(card);
+  for(const value of ['先看原话','我觉得要看上下文','之前：','现在：','仅公开视频简介','内容有截断'])assert.ok(text.includes(value),value);
+  assert.equal(findAll(card,node=>node.type==='a').length,1);assert.equal(ui.requests.length,0);
+  const details=findAll(card,node=>node.type==='details');assert.ok(details.length);assert.notEqual(details[0].props.open,true);
+});
+
+test('topic pause, resume and forgetting change only the selected interest without prompting or enabling autonomy',async()=>{
+  const ui=harness({companion:companionFixture()}),settings=structuredClone(ui.server.assistant.settings);
+  await ui.click('先放一放');assert.equal(ui.server.companion.threads[0].status,'paused');
+  await ui.click('继续琢磨');assert.equal(ui.server.companion.threads[0].status,'active');
+  await ui.click('忘掉这条兴趣');assert.deepEqual(ui.server.companion.threads,[]);assert.deepEqual(ui.server.assistant.settings,settings);
+  assert.deepEqual(ui.requests.filter(row=>row.method==='POST').map(row=>({route:row.route,body:row.body})),[{route:'companion/topic',body:{id:companionTopicId,status:'paused'}},{route:'companion/topic',body:{id:companionTopicId,status:'active'}},{route:'companion/forget',body:{id:companionTopicId}}]);
+});
+
+test('continuing a topic queues it explicitly and awaits navigation to the returned main session',async()=>{
+  const calls=[];let finish;const navigation=new Promise(resolve=>{finish=resolve;}),ui=harness({companion:companionFixture(),props:{openAssistantSession:async id=>{calls.push(id);await navigation;},close:()=>calls.push('close')}});
+  const pending=namedButton(companionCard(ui.render()),'接着聊').props.onClick();await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(calls,['companion-main']);assert.equal(namedField(ui.render(),'角色名').props.disabled,true);assert.equal(ui.getModel().busy,true);
+  const request=ui.requests.find(row=>row.route==='companion/chat');assert.equal(request.body.id,companionTopicId);assert.equal(typeof request.body.requestId,'string');assert.equal(request.body.reference,undefined);
+  finish();await pending;assert.deepEqual(calls,['companion-main','close']);assert.match(flatten(ui.render()),/真实读取尚未完成/);
+  assert.ok(!ui.requests.some(row=>['session','assistant/wake','config'].includes(row.route)&&row.method==='POST'));
+});
+
+test('continuing a topic without navigation keeps a useful local result and requires no close callback',async()=>{
+  const ui=harness({companion:companionFixture()});await ui.click('接着聊');
+  assert.match(flatten(ui.render()),/请从侧栏打开 My Fish 聊天/);assert.equal(ui.getModel().remote.sessionId,'companion-main');
+});
+
+test('companion actions protect every existing draft and preserve an unfinished Bilibili link',()=>{
+  for(const [label,value] of [['人设正文','未保存人设'],['记忆内容','未保存记忆'],['目标','未保存目标'],['计划名称','未保存计划'],['本次任务（可选）','未发送文字']]){
+    const ui=harness({companion:companionFixture()});ui.change(label,value);assert.equal(namedButton(companionCard(ui.render()),'接着聊').props.disabled,true,label);assert.equal(namedButton(ui.render(),'随便逛逛，回来聊').props.disabled,true,label);
+    ui.change('想一起聊的B站链接','BV1GJ411x7h7');assert.equal(namedButton(ui.render(),'聊这个').props.disabled,true,label);assert.equal(ui.requests.length,0);
+  }
+  const ui=harness({companion:companionFixture(),remote:{sessionId:'main'},props:{openAssistantSession:()=>{},close:()=>{}}});ui.change('想一起聊的B站链接','BV1GJ411x7h7');assert.equal(namedButton(ui.render(),'和助理聊天').props.disabled,true);assert.equal(namedButton(companionCard(ui.render()),'接着聊').props.disabled,true);assert.equal(namedButton(ui.render(),'聊这个').props.disabled,false);
+});
+
+test('Bilibili companion input normalizes only strict video references and never forwards tracking',async()=>{
+  for(const input of ['BV1GJ411x7h7',' https://www.bilibili.com/video/BV1GJ411x7h7/?share_source=synthetic#reply ']){
+    const ui=harness();ui.change('想一起聊的B站链接',input);await ui.click('聊这个');const request=ui.requests.find(row=>row.route==='companion/chat');assert.equal(request.body.reference,'BV1GJ411x7h7');assert.equal(request.body.id,undefined);assert.equal(ui.getModel().companionReference,'');assert.match(flatten(ui.render()),/真实读取尚未完成/);
+  }
+  for(const input of ['https://b23.tv/short','https://example.com/video/BV1GJ411x7h7/','http://www.bilibili.com/video/BV1GJ411x7h7/','https://user:password@www.bilibili.com/video/BV1GJ411x7h7/','https://www.bilibili.com:444/video/BV1GJ411x7h7/','BV2GJ411x7h7','https://www.bilibili.com/video/BV1GJ411x7h7/extra']){
+    const ui=harness();ui.change('想一起聊的B站链接',input);await ui.click('聊这个');assert.equal(ui.requests.some(row=>row.route==='companion/chat'),false,input);assert.equal(ui.getModel().companionReference,input);assert.match(flatten(ui.render()),/只接受|请填写/);
+  }
+});
+
+test('unknown companion outcomes retry with the same request key and leave the reference draft intact',async()=>{
+  const options={failRoute:'companion/chat',error:'synthetic timeout'},ui=harness(options);ui.change('想一起聊的B站链接','BV1GJ411x7h7');
+  await ui.click('聊这个');await ui.click('聊这个');const requests=ui.requests.filter(row=>row.route==='companion/chat');assert.equal(requests.length,2);assert.equal(requests[0].body.requestId,requests[1].body.requestId);assert.match(flatten(ui.render()),/同一请求核对/);assert.equal(ui.getModel().companionReference,'BV1GJ411x7h7');
+  options.failRoute='';await ui.click('聊这个');const success=ui.requests.filter(row=>row.route==='companion/chat').at(-1);assert.equal(success.body.requestId,requests[0].body.requestId);assert.equal(ui.getModel().companionReference,'');
+});
+
+test('a navigation failure reopens the accepted companion session without submitting it a second time',async()=>{
+  let calls=0;const ui=harness({companion:companionFixture(),props:{openAssistantSession:()=>{calls++;if(calls===1)throw Error('synthetic navigation unavailable');}}});
+  await ui.click('接着聊');assert.match(flatten(ui.render()),/再次点击只重试打开/);await ui.click('接着聊');assert.equal(calls,2);assert.equal(ui.requests.filter(row=>row.route==='companion/chat').length,1);
+});
+
+test('recovering the main session starts a new explicit companion request instead of reopening a cached retired main',async()=>{
+  for(const outcome of ['navigation-failure','unknown','uncertain']){
+    let failNavigation=outcome==='navigation-failure';const opened=[],options={remote:{sessionId:'retired-main'},companion:companionFixture(),...(outcome==='unknown'?{failRoute:'companion/chat',error:'synthetic dispatch interruption'}:outcome==='uncertain'?{companionResult:{ok:true,uncertain:true,sessionId:'retired-main'}}:{}),props:{openAssistantSession:id=>{opened.push(id);if(failNavigation){failNavigation=false;throw Error('synthetic navigation unavailable');}}}},ui=harness(options);
+    await ui.click('接着聊');const first=ui.requests.find(row=>row.route==='companion/chat');assert.ok(first);
+    ui.server.remote.sessionId='recovered-main';options.failRoute='';options.companionResult=undefined;await ui.click('刷新动态');assert.equal(ui.getModel().remote.sessionId,'recovered-main');
+    await ui.click('接着聊');const posts=ui.requests.filter(row=>row.route==='companion/chat');assert.equal(posts.length,2,outcome);assert.notEqual(posts[0].body.requestId,posts[1].body.requestId,outcome);assert.equal(opened.at(-1),'recovered-main',outcome);
+  }
+});
+
+test('a newly created companion main keeps its accepted request through navigation retry and clears every alias after success',async()=>{
+  let navigationCalls=0;const ui=harness({companion:companionFixture(),props:{openAssistantSession:()=>{navigationCalls++;if(navigationCalls===1)throw Error('synthetic navigation unavailable');}}});
+  assert.equal(ui.getModel().remote.sessionId,undefined);await ui.click('接着聊');assert.equal(ui.getModel().remote.sessionId,'companion-main');
+  const first=ui.requests.find(row=>row.route==='companion/chat');await ui.click('接着聊');assert.equal(ui.requests.filter(row=>row.route==='companion/chat').length,1);
+  await ui.click('接着聊');const posts=ui.requests.filter(row=>row.route==='companion/chat');assert.equal(posts.length,2);assert.notEqual(posts[1].body.requestId,first.body.requestId);
+});
+
+test('uncertain server dispatches stay uncertain and retain the same key and link for later reconciliation',async()=>{
+  const opened=[],options={companionResult:{ok:true,uncertain:true,sessionId:'uncertain-main'},props:{openAssistantSession:id=>opened.push(id),close:()=>opened.push('close')}},ui=harness(options);
+  ui.change('想一起聊的B站链接','BV1GJ411x7h7');await ui.click('聊这个');await ui.click('聊这个');
+  const posts=ui.requests.filter(row=>row.route==='companion/chat');assert.equal(posts.length,2);assert.equal(posts[0].body.requestId,posts[1].body.requestId);assert.deepEqual(opened,['uncertain-main','uncertain-main']);assert.equal(ui.getModel().companionReference,'BV1GJ411x7h7');assert.match(flatten(ui.render()),/投递结果尚未确认/);assert.ok(!flatten(ui.render()).includes('真实读取尚未完成'));
+  options.companionResult={ok:true,sessionId:'uncertain-main'};await ui.click('聊这个');assert.equal(ui.requests.filter(row=>row.route==='companion/chat').at(-1).body.requestId,posts[0].body.requestId);assert.equal(opened.length,2);assert.match(flatten(ui.render()),/续聊结果未能确认/);
+});
+
+test('concurrent companion clicks share one queued request and freeze other forms',async()=>{
+  let finish;const gate=new Promise(resolve=>{finish=resolve;}),ui=harness({onCompanionChat:()=>gate});const button=namedButton(ui.render(),'随便逛逛，回来聊');
+  const first=button.props.onClick(),second=button.props.onClick();assert.equal(ui.requests.filter(row=>row.route==='companion/chat').length,1);assert.equal(namedField(ui.render(),'角色名').props.disabled,true);assert.equal(namedButton(ui.render(),'聊这个').props.disabled,true);finish();await Promise.all([first,second]);assert.equal(ui.getModel().busy,false);
+});
+
+test('a slow companion read leaves personal settings usable and ignores its response after unmount',async()=>{
+  let finish;const gate=new Promise(resolve=>{finish=resolve;}),ui=harness({loaded:false,onCompanionGet:()=>gate});await ui.mount();assert.match(flatten(ui.render()),/角色名/);assert.equal(namedField(ui.render(),'角色名').props.disabled,false);assert.equal(ui.getModel().companion,null);ui.unmount();finish();await new Promise(resolve=>setImmediate(resolve));assert.equal(ui.getModel().companion,null);
+});
+
+test('companion refresh errors retain prior topics and every draft without claiming current state',async()=>{
+  const options={companion:companionFixture(),failRoute:'companion',error:'synthetic companion read failed'},ui=harness(options);ui.change('人设正文','保留草稿');ui.change('想一起聊的B站链接','BV1GJ411x7h7');
+  await ui.click('刷新最近话题');assert.match(flatten(ui.render()),/下面保留上次记录/);assert.match(flatten(ui.render()),/为什么同一段话/);assert.equal(namedButton(companionCard(ui.render()),'先放一放').props.disabled,true);assert.equal(namedField(ui.render(),'人设正文').props.value,'保留草稿');assert.equal(ui.getModel().companionReference,'BV1GJ411x7h7');
+  options.failRoute='';await ui.click('刷新最近话题');assert.equal(ui.getModel().companionError,'');assert.equal(namedField(ui.render(),'人设正文').props.value,'保留草稿');assert.equal(ui.getModel().companionReference,'BV1GJ411x7h7');
 });
 
 test('refresh preserves unsaved role, schedule and X drafts and blocks inconsistent wake',async()=>{
