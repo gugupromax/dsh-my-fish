@@ -3,6 +3,7 @@ import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
+import assert from 'node:assert/strict';
 import plugin from '../lib/index.js';
 import {Store} from '../lib/store.js';
 const root=process.argv[2]||'D:/Program Files/DeepSeek Harness/resources/app.asar/dsh/node_modules';
@@ -18,7 +19,7 @@ try {
   for(const name of ['x_whale_status','social_status','assistant_context','assistant_capabilities','assistant_plan','assistant_companion']){
     const definition=definitions.find(d=>d.name===name);if(!definition)continue;
     const status=await definition.execute(['assistant_plan','assistant_companion'].includes(name)?{action:'list'}:{},{agent:{id:sessionId,session:{id:sessionId}},signal:new AbortController().signal});
-    values.snapshotJsonValue(status);statuses.push(name);
+    assert.notEqual(values.snapshotJsonValue(status),undefined,name+' must pass lossless JSON validation');statuses.push(name);
   }
   console.log(JSON.stringify({hostSchema:'passed',hostStatusJson:'passed',registeredTools:names,statusTools:statuses},null,2));
 } finally {

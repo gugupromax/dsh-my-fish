@@ -23,7 +23,7 @@ function fixture() {
       if (requests.has(requestId)) { assert.equal(requests.get(requestId), fingerprint, 'host rejects changed actions on the same request key'); return host.snapshot(); }
       if (action.kind === 'create') {
         assert.ok(!tasks.some(row => row.id === action.id));
-        tasks.push({ id: action.id, ...structuredClone(action.input), status: 'todo', executions: [], schedule: { ...action.input.schedule, runCount: 0, nextRunAt: action.input.schedule.enabled ? NOW + 3600000 : undefined } });
+        tasks.push({ id: action.id, ...structuredClone(action.input), status: 'todo', executions: [], schedule: { ...action.input.schedule, lastTriggeredAt: undefined, runCount: 0, nextRunAt: action.input.schedule.enabled ? NOW + 3600000 : undefined } });
       } else {
         const task = tasks.find(row => row.id === action.taskId);
         assert.ok(task);
@@ -97,6 +97,47 @@ test('creation retries are deterministic across adapter instances and do not dup
   assert.equal(f.calls.length, 1);
   await assert.rejects(fresh.create({ ...input(), instruction: 'changed' }, 'main'), /另一项计划/);
   await assert.rejects(fresh.create(input(), 'another-session'), /另一项计划/);
+});
+
+test('plan responses are already lossless JSON across host optional fields and all management actions', async () => {
+  const f = fixture(), check = value => { assert.deepEqual(value, JSON.parse(JSON.stringify(value))); return value; };
+  const created = await f.plans.create(input(), 'main');
+  assert.equal(Object.hasOwn(f.rows()[0].schedule, 'lastTriggeredAt'), true, 'real host retains own undefined optional fields');
+  assert.equal(f.rows()[0].schedule.lastTriggeredAt, undefined);
+  check(created);
+  check(f.plans.list());
+  check(await f.plans.create(input(), 'main'));
+  const id = created.plan.id;
+  for (const action of ['pause', 'resume', 'update', 'cancel']) {
+    const result = await f.plans.manage({ id, action, requestId: 'json-' + action, ...(action === 'update' ? { schedule: { mode: 'once', at: NOW + 7200000, timeZone: 'UTC' } } : {}) });
+    check(result); check(f.plans.list());
+  }
+  check(await f.plans.manage({ id, action: 'cancel', requestId: 'json-cancel' }));
+  assert.equal(f.rows().length, 1);
+  assert.equal(f.calls.length, 5, 'JSON checking and retries never submit extra mutations');
+});
+
+test('public schedule fields omit unset values without losing stop metadata or mutating the host', async () => {
+  const f = fixture(), { plan } = await f.plans.create(input());
+  const task = f.rows()[0];
+  Object.assign(task.schedule, { lastTriggeredAt: NOW, endedAt: NOW + 1, endedReason: 'limit', skippedAt: NOW - 1, skippedReason: 'busy', extension: { privateValue: 'synthetic-unpublished' } });
+  const before = structuredClone(task), view = f.plans.list().plans[0];
+  assert.deepEqual(view.schedule, { enabled: true, mode: 'cron', cron: schedule.cron, timeZone: 'Asia/Shanghai', nextRunAt: NOW + 3600000, runCount: 0, lastTriggeredAt: NOW, endedAt: NOW + 1, endedReason: 'limit', skippedAt: NOW - 1, skippedReason: 'busy' });
+  assert.deepEqual(task, before);
+  view.schedule.cron = 'changed copy';
+  assert.equal(task.schedule.cron, schedule.cron);
+});
+
+test('execution history and older partial report receipts are lossless JSON without invented values', async () => {
+  const f = fixture(), { plan } = await f.plans.create(input());
+  f.rows()[0].executions.push({ id: 'json-open-run', sessionId: undefined, startedAt: NOW, endedAt: undefined, result: undefined, error: undefined });
+  f.store.saveState({ planReports: [{ planId: plan.id, executionId: 'older-receipt', at: NOW, notify: false }] });
+  const result = f.plans.list();
+  assert.deepEqual(result, JSON.parse(JSON.stringify(result)));
+  assert.equal(result.plans[0].lastRun.result, 'running');
+  assert.equal(result.plans[0].lastRun.endedAt, null);
+  assert.equal(result.plans[0].lastRun.sessionId, null);
+  assert.equal(result.plans[0].runReports[0].notified, undefined, 'missing historical facts are not invented');
 });
 
 test('repeated create after a one-shot has fired returns its original stopped plan', async () => {
@@ -253,6 +294,24 @@ test('installed task board source accepts real bridge actions and applies their 
   for (const key of ['mode', 'model', 'reasoningEffort']) assert.equal(created[key], undefined, 'card defaults must not supply ' + key);
   assert.equal(created.schedule.timeZone, 'Asia/Shanghai');
   assert.equal(created.schedule.nextRunAt, NOW + 3600000);
+  // Real pure transitions, rather than JSON round-tripped mocks, retain own
+  // undefined fields. Check the public projection before a renderer sees it.
+  let actualTasks = [created];
+  const actualPlans = new Plans({ getHost: () => ({ snapshot: () => ({ tasks: actualTasks }), apply() { throw Error('pure view only'); } }) });
+  const checkProjection = () => {
+    const value = actualPlans.list();
+    assert.equal(value.ok, true);
+    assert.deepEqual(value, JSON.parse(JSON.stringify(value)));
+  };
+  assert.equal(Object.hasOwn(created.schedule, 'lastTriggeredAt'), true);
+  assert.equal(created.schedule.lastTriggeredAt, undefined);
+  checkProjection();
+  for (const patch of [{ enabled: false }, { enabled: true }, { mode: 'once', at: NOW + 7200000 }, { ...schedule, enabled: true }]) {
+    const transition = applySetSchedule(actualTasks, created.id, patch, NOW, 'UTC');
+    assert.equal(transition.applied, true);
+    actualTasks = transition.tasks;
+    checkProjection();
+  }
   const task = { id: 'synthetic-only', executions: [], status: 'todo' };
   const changed = applySetSchedule([task], task.id, { ...schedule, enabled: true }, NOW, 'UTC');
   assert.equal(changed.applied, true);

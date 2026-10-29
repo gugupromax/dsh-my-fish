@@ -1,6 +1,6 @@
 # My Fish 代码地图
 
-当前 0.6.1，包和宿主/前端模块 dsh-my-fish。
+当前 0.6.2，包和宿主/前端模块 dsh-my-fish。
 
 session-binding.js负责宿主真实分组、元数据候选及显式绑定既有会话；Scheduler有效main只probe/attach，创建用workspaceId与实际returnedID。verify-session-binding.mjs通过真实SessionController/WorkspaceRegistry验证已开始会话不能再用create续聊。
 
