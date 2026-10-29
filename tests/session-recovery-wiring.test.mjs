@@ -10,7 +10,7 @@ import { AssistantStore } from '../lib/assistant-store.js';
 import { dayKey } from '../lib/engine.js';
 
 const OLD = 'synthetic-deleted-main';
-const agent = id => ({ id, status: 'idle', session: { id, header: { id } } });
+const agent = (id, cwd) => ({ id, status: 'idle', session: { id, header: { version: 4, id, isSeeded: false, ...(cwd === undefined ? {} : { cwd }) } } });
 const flush = async () => { for (let i = 0; i < 4; i++) await new Promise(resolve => setImmediate(resolve)); };
 
 function fixture(t, options = {}) {
@@ -45,9 +45,30 @@ function fixture(t, options = {}) {
     if (options.badMetadata && id === OLD) return { header: { id: 'different-session' }, revision: 'synthetic' };
     return metadata.get(id);
   } };
-  if (options.archived) metadata.set(OLD, { header: { id: OLD }, revision: 'synthetic-version', archived: true });
-  if (options.live) { const old = agent(OLD); live.set(OLD, old.session); rows.push(old); }
+  if (options.archived) metadata.set(OLD, { header: { version: 4, id: OLD, cwd: data, isSeeded: false }, revision: 'synthetic-version', archived: true });
+  if (options.live) { const old = agent(OLD, data); live.set(OLD, old.session); rows.push(old); }
+  // This suite exercises recovery with an available native group. Selection
+  // and unavailable-group behavior are covered by the binding-specific tests.
+  const groupIds = [OLD];
+  const group = {
+    id: 'synthetic-personal-workspace', path: data, title: 'Synthetic personal workspace',
+    get sessionIds() { return [...groupIds]; },
+    attachSession: async id => {
+      const header = live.get(id)?.header ?? metadata.get(id)?.header;
+      assert.ok(header && header.id === id, 'Native attachment requires actual session metadata');
+      assert.equal(await fs.promises.realpath(header.cwd), await fs.promises.realpath(data), 'Native attachment requires matching immutable cwd');
+      if (!groupIds.includes(id)) groupIds.push(id);
+    },
+  };
+  const workspaceRegistry = {
+    archivedSessionIds: [],
+    list: () => [group],
+    get: id => id === group.id ? group : undefined,
+    resolveByPath: async value => (await fs.promises.realpath(value)) === (await fs.promises.realpath(data)) ? group : undefined,
+    create: async value => { assert.equal(await fs.promises.realpath(value), await fs.promises.realpath(data)); return group; },
+  };
   const services = new Map();
+  services.set('workspaceRegistry', workspaceRegistry);
   if (!options.noRegistry) services.set('agents', registry);
   if (!options.noSessions) services.set('sessions', sessions);
   if (!options.noPersistence) services.set('sessionPersistence', persistence);
@@ -66,9 +87,12 @@ function fixture(t, options = {}) {
       sessionController: {
         create: async request => {
           calls.create.push(structuredClone(request));
+          assert.equal(request.workspaceId, group.id, 'Recovery must explicitly create inside the selected native group');
+          assert.equal(request.cwd, undefined, 'Native SessionController rejects workspaceId together with cwd');
           if (options.failCreateBefore && calls.create.length === 1) throw Error('synthetic create failure before commit');
-          const created = agent(request.sessionId); created.session.header.cwd = request.cwd; created.session.effectiveCwd = request.cwd;
-          live.set(request.sessionId, created.session); metadata.set(request.sessionId, { header: { id: request.sessionId }, revision: 'created-version' }); rows.push(created);
+          const created = agent(request.sessionId, group.path); created.session.effectiveCwd = group.path;
+          live.set(request.sessionId, created.session); metadata.set(request.sessionId, { header: { ...created.session.header }, revision: 'created-version' }); rows.push(created);
+          await group.attachSession(request.sessionId);
           if (options.unknownCreateOnce && calls.create.length === 1) throw Error('synthetic unknown create outcome');
           await Promise.resolve(); return { sessionId: request.sessionId };
         },
@@ -98,7 +122,7 @@ function fixture(t, options = {}) {
     const res = { statusCode: 0, setHeader() {}, end(value) { result = { status: this.statusCode, data: JSON.parse(value) }; } };
     await routes.get(prefix)(req, res); return result;
   }
-  return { root, home, data, store, assistant, preserved, beforeFiles, oldRun, rows, ownership, calls, live, metadata, tools, ticks, options, dispatch,
+  return { root, home, data, store, assistant, preserved, beforeFiles, oldRun, rows, ownership, calls, live, metadata, tools, ticks, options, dispatch, group, workspaceRegistry,
     connect: (name, service) => { services.set(name, service); for (const entry of injections) activate(entry); }, sessions, persistence, registry,
     execute: (name, args, subject = agent('ordinary-session')) => tools.get(name).execute(args, { agent: subject, signal: new AbortController().signal }),
     guard: (name, args, subject) => guards[0]({ name, arguments: args, agent: subject }),
@@ -108,10 +132,11 @@ function fixture(t, options = {}) {
 test('trusted manual recovery through both APIs creates one replacement without prompt or private file changes', async t => {
   const f = fixture(t, { oldActive: true, custom: true });
   const [first, second] = await Promise.all([f.dispatch('POST', 'session'), f.dispatch('POST', 'session', {}, { legacy: true })]);
-  assert.equal(first.status, 200); assert.equal(second.status, 200);
+  assert.equal(first.status, 200, first.data.error); assert.equal(second.status, 200, second.data.error);
   assert.notEqual(first.data.sessionId, OLD); assert.equal(first.data.sessionId, second.data.sessionId);
   assert.equal(f.calls.create.length, 1); assert.equal(f.calls.prompt.length, 0);
-  assert.equal(f.calls.create[0].cwd, path.join(f.data, 'workspace'));
+  assert.equal(f.calls.create[0].workspaceId, f.group.id); assert.equal(f.calls.create[0].cwd, undefined);
+  assert.equal(f.live.get(first.data.sessionId).header.cwd, f.data); assert.ok(f.group.sessionIds.includes(first.data.sessionId));
   assert.equal(f.store.state().sessionId, first.data.sessionId);
   assert.equal(f.store.state().sessionCreation, null);
   for (const [name, bytes] of f.beforeFiles) assert.deepEqual(fs.readFileSync(f.store.file(name)), bytes, name);
@@ -165,7 +190,7 @@ test('live and archived metadata keep the original main rather than interpreting
   const archived = await f.dispatch('POST', 'session'); assert.equal(archived.status, 200);
   assert.equal(archived.data.sessionId, OLD); assert.equal(archived.data.created, false);
   assert.deepEqual(f.store.state(), before);
-  f.metadata.delete(OLD); const live = agent(OLD); f.live.set(OLD, live.session); f.rows.push(live);
+  f.metadata.delete(OLD); const live = agent(OLD, f.data); f.live.set(OLD, live.session); f.rows.push(live);
   assert.equal((await f.dispatch('POST', 'session')).data.sessionId, OLD);
   assert.equal(f.calls.create.length, 0); assert.equal(f.calls.prompt.length, 0);
 });

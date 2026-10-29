@@ -10,7 +10,13 @@ sessionController.prompt({sessionId, requestId, mode:'queue', content, clientTim
 uiWorkspace.openSession(sessionId)
 ```
 
-create 没有 title，workspaceId 与 cwd 互斥；用宿主返回 ID 并持久保存。prompt 第二参数为 AbortSignal，accepted 仅是接收。首次入口只初始化；以后打开原会话，不投递、不计探索次数。改名不自动 rename 用户会话标题。
+create 没有 title，workspaceId 与 cwd 互斥；用宿主返回 ID 并持久保存。prompt 第二参数为 AbortSignal，accepted 仅是接收。打开原会话不投递、不计探索次数。改名不自动 rename 用户会话标题。
+
+0.6.1核实真实SessionController：create({sessionId})只尝试复用空会话，已发生turn/start时会mint另一ID；不能用于恢复或挂组一个已有非空会话。首次创建通过workspaceRegistry解析/注册目录，再传workspaceId，宿主在创建后attachSession；只传cwd不会自动归组。既有主会话只经sessions.get/stat确认后直接续用，必要时单独attach，不再create。
+
+workspaceRegistry.list/get/resolveByPath/create与workspace.attachSession为公开服务。attachSession保持ID但要求realpath(header.cwd)与workspace.path相同；effective cwd变更不能改变这个约束。可信POSTsession/bind允许显式选中组内已有普通会话作为主会话，仅切换插件绑定，不改头、聊天或权限开关。它先检查旧/新main和活跃owned子代空闲、无未知投递，再保存mainSessionBinding并将旧main退役。候选只读live.header或persistence.stat，不读正文。
+
+verify-session-binding直接使用真实安装版Controller/AgentRegistry/WorkspaceRegistry与临时合成日志，证明create反例、实际Scheduler多次打开/续聊只prompt不create、对象重载仍同ID、cold metadata绑定和真正workspaceId首建。它的3次合成prompt都在模型执行前拒绝，模型数为零，不等于真实进程重启或真人长期交互。
 
 ## 工作区变更（0.4.1）
 

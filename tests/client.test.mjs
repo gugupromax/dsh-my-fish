@@ -19,18 +19,21 @@ function harness(options={}){
   data.workspace={ok:true,path:'C:\\Synthetic\\my-fish',workingDirectory:'C:\\Synthetic\\my-fish\\workspace',migrating:false,canMigrate:true,lastMigration:null,...options.workspace};
   if(options.channels!==undefined)data.channels=options.channels;
   if(options.companion!==undefined)data.companion=options.companion;
+  data.sessionBinding={ok:true,available:true,requiresBinding:false,current:data.remote.sessionId?{sessionId:data.remote.sessionId}:null,workspaces:[],selectedWorkspaceId:null,candidates:[],...options.sessionBinding};
   if(options.config)Object.assign(data.remote.config,options.config);
   const server=structuredClone(data),requests=[];
   const RuntimeDate=options.now===undefined?Date:class extends Date{constructor(...args){super(...(args.length?args:[options.now]));}static now(){return options.now;}};
-  let model,plugin,effect,hasEffect=false,cleanup,intervalCallback,intervalDelay,clearedInterval;
+  let model,plugin,effect,hasEffect=false,cleanup,intervalCallback,intervalDelay,clearedInterval,ref;
   const react={
     createElement:(type,props,...children)=>({type,props:props||{},children}),
     useState:initial=>{model??=initial;return [model,next=>{model=typeof next==='function'?next(model):next;}];},
+    useRef:initial=>{ref??={current:initial};return ref;},
     useEffect:fn=>{if(!hasEffect){hasEffect=true;effect=fn;}}
   };
   async function request(url,opts={}){
     assert.ok(url.startsWith('/my-fish/api/'),'only local plugin routes');
     const route=url.slice('/my-fish/api/'.length),body=opts.body?JSON.parse(opts.body):undefined;
+    const [routePath,query='']=route.split('?'),bindingWorkspaceId=new URL('http://localhost/?'+query).searchParams.get('workspaceId')||'';
     requests.push({route,method:opts.method||'GET',body});
     if(route==='channels'&&options.onChannelsGet)await options.onChannelsGet();
     if(route==='assistant'&&body===undefined&&options.onAssistantGet)await options.onAssistantGet();
@@ -38,8 +41,21 @@ function harness(options={}){
     if(route==='assistant/snooze'&&options.onSnooze)await options.onSnooze(body);
     if(route==='companion'&&body===undefined&&options.onCompanionGet)await options.onCompanionGet();
     if(route==='companion/chat'&&options.onCompanionChat)await options.onCompanionChat(body);
-    if(options.failRoute===route)return {ok:false,json:async()=>({ok:false,error:options.error||'连接失败'})};
+    if(routePath==='session-binding'&&options.onBindingGet)await options.onBindingGet(bindingWorkspaceId);
+    if(route==='session/bind'&&options.onBindingPost)await options.onBindingPost(body);
+    if(options.failRoute===route||options.failRoute===routePath)return {ok:false,json:async()=>({ok:false,error:options.error||'连接失败'})};
+    if(body===undefined&&routePath==='session-binding'){
+      const value=structuredClone(server.sessionBinding);
+      if(!options.sessionBinding)value.current=server.remote.sessionId?{sessionId:server.remote.sessionId}:null;
+      if(bindingWorkspaceId){value.selectedWorkspaceId=bindingWorkspaceId;if(options.bindingCandidatesByGroup)value.candidates=structuredClone(options.bindingCandidatesByGroup[bindingWorkspaceId]||[]);}
+      return {ok:true,json:async()=>value};
+    }
     if(body===undefined)return {ok:true,json:async()=>structuredClone(route==='state'?server.remote:route==='plans'?server.plans:route==='permissions'?server.permissions:route==='workspace'?server.workspace:route==='channels'?server.channels:route==='companion'?server.companion:server.assistant)};
+    if(route==='session/bind'){
+      const result=options.bindingResult||{ok:true,sessionId:body.sessionId,note:'已固定使用已有会话，没有创建聊天或发送消息。'};
+      if(result.sessionId===body.sessionId){server.remote.sessionId=result.sessionId;server.sessionBinding={...server.sessionBinding,requiresBinding:false,selectedWorkspaceId:body.workspaceId,current:{sessionId:body.sessionId,workspaceId:body.workspaceId,cwd:server.sessionBinding.candidates.find(row=>row.id===body.sessionId)?.cwd||''}};}
+      return {ok:true,json:async()=>structuredClone(result)};
+    }
     if(route==='assistant/profile')server.assistant.profile={...server.assistant.profile,...body};
     else if(route==='assistant/settings')server.assistant.settings={...server.assistant.settings,...body};
     else if(route==='assistant/snooze'){
@@ -84,7 +100,7 @@ function harness(options={}){
   vm.runInNewContext(source,{window:{__ModuleLoader__:{load:entry=>{plugin=entry.factory(()=>react);}}},Date:RuntimeDate,JSON,URL,fetch:request,setInterval:(fn,delay)=>{intervalCallback=fn;intervalDelay=delay;return 123;},clearInterval:id=>{clearedInterval=id;}});
   const render=()=>plugin.Section(options.props||{});
   render();
-  if(options.loaded!==false)model={...model,remote:data.remote,assistant:data.assistant,companion:data.companion,cfg:data.remote.config,profile:data.assistant.profile,settings:data.assistant.settings,plans:data.plans,channels:data.channels,policy:data.permissions.policy,capabilities:data.permissions.capabilities,workspace:data.workspace,workspaceDraft:{path:data.workspace.path},saved:{cfg:JSON.stringify(data.remote.config),profile:JSON.stringify(data.assistant.profile),settings:JSON.stringify(data.assistant.settings),policy:JSON.stringify(data.permissions.policy),workspaceDraft:JSON.stringify({path:data.workspace.path})}};
+  if(options.loaded!==false)model={...model,remote:data.remote,assistant:data.assistant,companion:data.companion,sessionBinding:data.sessionBinding,bindingWorkspaceId:data.sessionBinding.selectedWorkspaceId||'',bindingSessionId:data.sessionBinding.candidates.length===1?data.sessionBinding.candidates[0].id:'',cfg:data.remote.config,profile:data.assistant.profile,settings:data.assistant.settings,plans:data.plans,channels:data.channels,policy:data.permissions.policy,capabilities:data.permissions.capabilities,workspace:data.workspace,workspaceDraft:{path:data.workspace.path},saved:{cfg:JSON.stringify(data.remote.config),profile:JSON.stringify(data.assistant.profile),settings:JSON.stringify(data.assistant.settings),policy:JSON.stringify(data.permissions.policy),workspaceDraft:JSON.stringify({path:data.workspace.path})}};
   return {
     render,requests,server,getModel:()=>model,
     setModel:changes=>{model={...model,...changes};},
@@ -121,7 +137,7 @@ test('mount loads the personal layer and X status independently without external
   const ui=harness({loaded:false});
   assert.match(flatten(ui.render()),/正在读取个人助理/);
   await ui.mount();
-  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['state','GET'],['assistant','GET'],['plans','GET'],['permissions','GET'],['workspace','GET'],['channels','GET'],['companion','GET']]);
+  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['state','GET'],['assistant','GET'],['plans','GET'],['permissions','GET'],['workspace','GET'],['channels','GET'],['companion','GET'],['session-binding','GET']]);
   assert.match(flatten(ui.render()),/My Fish/);
 });
 
@@ -134,6 +150,83 @@ test('manual wake works without X identity and sends the one-time task instead o
   assert.equal(namedField(tree,'本次任务（可选）').props.value,'');
   assert.match(flatten(tree),/尚未执行完成/);
   assert.ok(!ui.requests.some(row=>['run','diagnose'].includes(row.route)));
+});
+
+function bindingFixture({multiple=false}={}){return {ok:true,available:true,requiresBinding:true,current:{sessionId:'synthetic-ungrouped',cwd:'C:/Synthetic/old'},workspaces:[{id:'synthetic-group-a',title:'合成分组A',path:'C:/Synthetic/fish'},{id:'synthetic-group-b',title:'合成分组B',path:'C:/Synthetic/other'}],selectedWorkspaceId:'synthetic-group-a',candidates:[{id:'synthetic-existing-a',title:'合成长期会话',cwd:'C:/Synthetic/fish'},...(multiple?[{id:'synthetic-existing-a2',title:'合成第二会话',cwd:'C:/Synthetic/fish'}]:[])]};}
+
+test('existing-session binding blocks accidental new chats, adopts the selected ID and sends no prompt',async()=>{
+  const opened=[],ui=harness({remote:{sessionId:'synthetic-ungrouped'},sessionBinding:bindingFixture(),props:{openAssistantSession:id=>opened.push(id),close:()=>{}}});
+  await ui.mount();
+  assert.equal(namedField(ui.render(),'分组内已有会话').props.value,'synthetic-existing-a');
+  for(const label of ['和助理聊天','随便逛逛，回来聊','现在唤醒'])assert.equal(namedButton(ui.render(),label).props.disabled,true,label);
+  const original=structuredClone(ui.server.assistant);await ui.click('固定使用这条会话');
+  assert.deepEqual(ui.requests.filter(row=>row.method==='POST').map(({route,body})=>({route,body})),[{route:'session/bind',body:{workspaceId:'synthetic-group-a',sessionId:'synthetic-existing-a'}}]);
+  assert.deepEqual(ui.server.assistant,original);assert.equal(ui.getModel().remote.sessionId,'synthetic-existing-a');assert.match(flatten(ui.render()),/已固定使用这条会话/);
+  assert.equal(namedButton(ui.render(),'固定使用这条会话').props.disabled,true);
+  await ui.click('和助理聊天');assert.deepEqual(opened,['synthetic-existing-a']);assert.equal(ui.requests.filter(row=>row.route==='session').length,1);
+  assert.ok(!ui.requests.some(row=>['assistant/wake','companion/chat'].includes(row.route)));
+});
+
+test('multiple candidates require an explicit choice and group reads preserve all unrelated drafts',async()=>{
+  const ui=harness({remote:{sessionId:'synthetic-ungrouped'},sessionBinding:bindingFixture({multiple:true}),bindingCandidatesByGroup:{'synthetic-group-b':[{id:'synthetic-existing-b',title:'合成另组会话',cwd:'C:/Synthetic/other'}]}});
+  await ui.mount();assert.equal(namedField(ui.render(),'分组内已有会话').props.value,'');assert.equal(namedButton(ui.render(),'固定使用这条会话').props.disabled,true);
+  ui.change('角色名','尚未保存的人设名');ui.change('间隔分钟（30–1440）','91');ui.change('记忆内容','尚未保存的记忆');
+  ui.change('会话所属分组','synthetic-group-b');await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(namedField(ui.render(),'分组内已有会话').props.value,'synthetic-existing-b');assert.equal(namedField(ui.render(),'角色名').props.value,'尚未保存的人设名');assert.equal(namedField(ui.render(),'间隔分钟（30–1440）').props.value,91);assert.equal(namedField(ui.render(),'记忆内容').props.value,'尚未保存的记忆');
+  assert.equal(namedButton(ui.render(),'固定使用这条会话').props.disabled,true);assert.ok(!ui.requests.some(row=>row.method==='POST'));
+  assert.ok(ui.requests.some(row=>row.route==='session-binding?workspaceId=synthetic-group-b'));
+});
+
+test('candidate requests cannot replace a newer group selection when the previous response is slow',async()=>{
+  let release;const gate=new Promise(resolve=>{release=resolve;}),ui=harness({remote:{sessionId:'synthetic-ungrouped'},sessionBinding:bindingFixture(),bindingCandidatesByGroup:{'synthetic-group-a':[{id:'synthetic-existing-a',cwd:'C:/Synthetic/fish'}],'synthetic-group-b':[{id:'synthetic-existing-b',cwd:'C:/Synthetic/other'}]},onBindingGet:group=>group==='synthetic-group-b'?gate:undefined});
+  await ui.mount();ui.change('会话所属分组','synthetic-group-b');assert.equal(ui.getModel().bindingLoading,true);
+  ui.change('会话所属分组','synthetic-group-a');await new Promise(resolve=>setImmediate(resolve));release();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(namedField(ui.render(),'会话所属分组').props.value,'synthetic-group-a');assert.equal(namedField(ui.render(),'分组内已有会话').props.value,'synthetic-existing-a');assert.equal(ui.getModel().bindingLoading,false);
+});
+
+test('failed binding keeps the chosen existing session and never claims that it created or adopted it',async()=>{
+  const ui=harness({remote:{sessionId:'synthetic-ungrouped'},sessionBinding:bindingFixture({multiple:true}),failRoute:'session/bind',error:'合成绑定未完成'});
+  await ui.mount();ui.change('分组内已有会话','synthetic-existing-a2');await ui.click('固定使用这条会话');
+  assert.equal(namedField(ui.render(),'分组内已有会话').props.value,'synthetic-existing-a2');assert.equal(ui.getModel().remote.sessionId,'synthetic-ungrouped');assert.match(flatten(ui.render()),/合成绑定未完成/);assert.ok(!flatten(ui.render()).includes('已固定使用这条会话，聊天'));
+  assert.deepEqual(ui.requests.filter(row=>row.method==='POST').map(row=>row.route),['session/bind']);
+});
+
+test('binding is single-flight and freezes its inputs without sending other form values',async()=>{
+  let release;const gate=new Promise(resolve=>{release=resolve;}),ui=harness({remote:{sessionId:'synthetic-ungrouped'},sessionBinding:bindingFixture(),onBindingPost:()=>gate});await ui.mount();
+  const original=namedButton(ui.render(),'固定使用这条会话'),first=original.props.onClick(),second=original.props.onClick();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ui.requests.filter(row=>row.route==='session/bind').length,1);assert.equal(namedField(ui.render(),'会话所属分组').props.disabled,true);assert.equal(namedField(ui.render(),'角色名').props.disabled,true);assert.equal(namedButton(ui.render(),'现在唤醒').props.disabled,true);
+  release();await Promise.all([first,second]);assert.equal(ui.getModel().bindingSaving,false);
+});
+
+test('unavailable or unreadable binding services keep settings usable while refusing uncertain session actions',async()=>{
+  for(const options of [{sessionBinding:{...bindingFixture(),available:false,reason:'合成宿主分组服务未就绪'}},{sessionBinding:bindingFixture(),failRoute:'session-binding',error:'合成列表读取失败'}]){
+    const ui=harness({remote:{sessionId:'synthetic-ungrouped'},...options});await ui.mount();
+    for(const label of ['和助理聊天','随便逛逛，回来聊','现在唤醒','固定使用这条会话'])assert.equal(namedButton(ui.render(),label).props.disabled,true,label);
+    assert.equal(namedField(ui.render(),'角色名').props.disabled,false);assert.ok(!ui.requests.some(row=>row.method==='POST'));
+    assert.match(flatten(ui.render()),options.failRoute?/上次固定会话|上次记录/:/合成宿主分组服务未就绪/);
+  }
+});
+
+test('a slow independent binding read neither blocks personal records nor applies after unmount',async()=>{
+  let release;const gate=new Promise(resolve=>{release=resolve;}),ui=harness({loaded:false,onBindingGet:()=>gate});await ui.mount();
+  assert.match(flatten(ui.render()),/角色名/);assert.equal(namedField(ui.render(),'角色名').props.disabled,false);assert.equal(ui.getModel().sessionBinding,null);ui.unmount();release();await new Promise(resolve=>setImmediate(resolve));assert.equal(ui.getModel().sessionBinding,null);
+});
+
+test('a mismatched binding acknowledgement cannot silently adopt a different session',async()=>{
+  const ui=harness({remote:{sessionId:'synthetic-ungrouped'},sessionBinding:bindingFixture(),bindingResult:{ok:true,sessionId:'synthetic-unexpected'}});await ui.mount();await ui.click('固定使用这条会话');
+  assert.equal(ui.getModel().remote.sessionId,'synthetic-ungrouped');assert.match(flatten(ui.render()),/固定会话结果未能确认/);assert.equal(ui.requests.filter(row=>row.route==='session/bind').length,1);
+});
+
+test('binding service becoming unavailable preserves selected metadata without calling it a confirmed current binding',async()=>{
+  const fixture=bindingFixture({multiple:true});fixture.requiresBinding=false;fixture.current={sessionId:'synthetic-existing-a',workspaceId:'synthetic-group-a',cwd:'C:/Synthetic/fish'};
+  const ui=harness({remote:{sessionId:'synthetic-existing-a'},sessionBinding:fixture});await ui.mount();ui.change('分组内已有会话','synthetic-existing-a2');
+  ui.server.sessionBinding={ok:true,available:false,requiresBinding:false,current:null,workspaces:[],selectedWorkspaceId:null,candidates:[],reason:'合成服务暂时断开'};
+  await ui.poll();assert.equal(namedField(ui.render(),'会话所属分组').props.value,'synthetic-group-a');assert.equal(namedField(ui.render(),'分组内已有会话').props.value,'synthetic-existing-a2');assert.match(flatten(ui.render()),/上次固定会话/);assert.ok(!flatten(ui.render()).includes('已固定使用这条会话，聊天'));assert.equal(namedButton(ui.render(),'固定使用这条会话').props.disabled,true);
+});
+
+test('the backend binding requirement controls first-create behavior rather than the mere presence of groups',async()=>{
+  const ui=harness({remote:{sessionId:null},sessionBinding:{...bindingFixture(),current:null,requiresBinding:false},props:{openAssistantSession:()=>{},close:()=>{}}});await ui.mount();
+  assert.equal(namedButton(ui.render(),'建立聊天会话').props.disabled,false);await ui.click('建立聊天会话');assert.equal(ui.requests.filter(row=>row.route==='session').length,1);assert.ok(!ui.requests.some(row=>row.route==='session/bind'));
 });
 
 const companionTopicId='11111111-1111-4111-8111-111111111111';
@@ -715,7 +808,8 @@ test('concurrent sidebar and settings clicks share one session check and open th
   const data=previewData(),requests=[],opened=[];let plugin,finish,closed=0;
   const gate=new Promise(resolve=>{finish=resolve;});
   const loaded={remote:{...data.remote,sessionId:'deleted-main'},assistant:data.assistant,cfg:data.remote.config,profile:data.assistant.profile,settings:data.assistant.settings,plans:data.plans,policy:data.permissions.policy,capabilities:data.permissions.capabilities,saved:{cfg:JSON.stringify(data.remote.config),profile:JSON.stringify(data.assistant.profile),settings:JSON.stringify(data.assistant.settings),policy:JSON.stringify(data.permissions.policy)}};
-  const react={createElement:(type,props,...children)=>({type,props:props||{},children}),useState:initial=>[Object.hasOwn(initial,'remote')?{...initial,...loaded}:initial,()=>{}],useEffect:()=>{}};
+  loaded.sessionBinding={available:true,requiresBinding:false,current:{sessionId:'deleted-main'},workspaces:[],candidates:[]};
+  const react={createElement:(type,props,...children)=>({type,props:props||{},children}),useState:initial=>[Object.hasOwn(initial,'remote')?{...initial,...loaded}:initial,()=>{}],useRef:initial=>({current:initial}),useEffect:()=>{}};
   vm.runInNewContext(source,{window:{__ModuleLoader__:{load:entry=>{plugin=entry.factory(()=>react);}}},Date,JSON,URL,fetch:async(url,options={})=>{requests.push({url,method:options.method});await gate;return {ok:true,json:async()=>({ok:true,sessionId:'one-recovered-main',created:true,recovered:true})};}});
   const settings=plugin.Section({openAssistantSession:id=>opened.push(id),close:()=>{closed++;}}),sidebar=plugin.SidebarEntry({openAssistantSession:id=>opened.push(id)});
   const settingsClick=namedButton(settings,'和助理聊天').props.onClick(),sidebarClick=namedButton(sidebar,'鱼  My Fish').props.onClick();

@@ -19,8 +19,9 @@ export function previewData(mode='solo') {
 }
 export function previewTree(mode='solo',overrides={}) {
   const {remote,assistant,companion,plans,permissions,workspace,channels}=previewData(mode);
+  const sessionBinding={ok:true,available:true,requiresBinding:false,current:null,workspaces:[],selectedWorkspaceId:null,candidates:[]};
   let plugin;
-  const react={createElement:(type,props,...children)=>({type,props:props||{},children}),useState:initial=>[{...initial,remote,assistant,companion,plans,channels,workspace,workspaceDraft:{path:workspace.path},policy:permissions.policy,capabilities:permissions.capabilities,cfg:remote.config,profile:assistant.profile,settings:assistant.settings,saved:{cfg:JSON.stringify(remote.config),profile:JSON.stringify(assistant.profile),settings:JSON.stringify(assistant.settings),policy:JSON.stringify(permissions.policy),workspaceDraft:JSON.stringify({path:workspace.path})},...overrides},()=>{}],useEffect:()=>{}};
+  const react={createElement:(type,props,...children)=>({type,props:props||{},children}),useState:initial=>[{...initial,remote,assistant,companion,plans,channels,workspace,sessionBinding,workspaceDraft:{path:workspace.path},policy:permissions.policy,capabilities:permissions.capabilities,cfg:remote.config,profile:assistant.profile,settings:assistant.settings,saved:{cfg:JSON.stringify(remote.config),profile:JSON.stringify(assistant.profile),settings:JSON.stringify(assistant.settings),policy:JSON.stringify(permissions.policy),workspaceDraft:JSON.stringify({path:workspace.path})},...overrides},()=>{}],useRef:initial=>({current:initial}),useEffect:()=>{}};
   vm.runInNewContext(fs.readFileSync(new URL('../lib/client.js',import.meta.url),'utf8'),{window:{__ModuleLoader__:{load:o=>{plugin=o.factory(n=>{if(n==='react')return react;throw Error('Unexpected dependency');});}}},Date,JSON,URL,fetch:()=>{throw Error('Preview must never access network');}});
   return plugin.Section();
 }
