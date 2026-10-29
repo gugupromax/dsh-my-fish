@@ -88,6 +88,37 @@ function fixture(t, { available = true, registryAvailable = true } = {}) {
 }
 const draft = requestId => ({ action: 'create', requestId, title: '受控测试计划', instruction: '仅查看公开测试资料，有变化才通知。', schedule: { mode: 'cron', cron: '0 * * * *', timeZone: 'Asia/Shanghai' } });
 
+test('temporary snooze is a trusted settings-only operation with strict presets and no new model tool', async t => {
+  const f=fixture(t),before=JSON.stringify(f.store.state());
+  assert.equal(f.tools.has('assistant_snooze'),false);assert.equal(f.tools.size,22);
+  for(const prefix of ['/my-fish/api','/x-whale/api']){
+    const paused=await f.http(prefix,'POST','assistant/snooze',{preset:'two-hours'});
+    assert.equal(paused.status,200);assert.equal(paused.body.settings.enabled,false);assert.ok(paused.body.settings.snoozeUntil>Date.now());
+    const until=paused.body.settings.snoozeUntil;
+    assert.equal((await f.http(prefix,'GET','assistant/snooze')).status,405);
+    assert.equal((await f.http(prefix,'POST','assistant/snooze',{preset:'resume'},{origin:'https://untrusted.invalid'})).status,403);
+    for(const body of [null,[],{}, {preset:1},{preset:'unknown'},{preset:'resume',enabled:true},{snoozeUntil:null}])assert.equal((await f.http(prefix,'POST','assistant/snooze',body)).status,400);
+    assert.equal((await f.http(prefix,'GET','assistant')).body.settings.snoozeUntil,until);
+    assert.equal((await f.http(prefix,'POST','assistant/settings',{intervalMinutes:240})).body.settings.snoozeUntil,until);
+    assert.equal((await f.http(prefix,'POST','assistant/settings',{snoozeUntil:null})).status,400);
+    assert.equal((await f.http(prefix,'POST','assistant/snooze',{preset:'resume'})).body.settings.snoozeUntil,null);
+  }
+  assert.equal(JSON.stringify(f.store.state()),before);assert.equal(f.hostCalls.length,0);
+});
+
+test('temporary snooze does not pause exact task-board schedules or suppress their valid local reports', async t => {
+  const f=fixture(t),created=await f.run('assistant_plan',draft('snooze-exact-plan'));
+  const original=structuredClone(f.taskRows[0].schedule);
+  await f.http('/my-fish/api','POST','assistant/snooze',{preset:'two-hours'});
+  assert.deepEqual(f.taskRows[0].schedule,original);assert.equal(f.hostCalls.length,1);
+  assert.equal((await f.http('/my-fish/api','GET','plans')).body.plans[0].status,'scheduled');
+  f.taskRows[0].executions.push({id:'snooze-host-execution',sessionId:'worker-session',startedAt:Date.now()});
+  const report=await f.run('assistant_plan_report',{id:created.plan.id,notify:true,title:'Synthetic exact reminder',summary:'Synthetic reminder delivered during proactive snooze.'},f.worker);
+  assert.equal(report.notified,true);assert.equal((await f.http('/my-fish/api','GET','assistant')).body.inbox.length,1);
+  assert.deepEqual(f.taskRows[0].schedule,original);assert.equal(f.taskRows[0].executions[0].endedAt,undefined);
+  assert.ok((await f.http('/my-fish/api','GET','assistant')).body.settings.snoozeUntil>Date.now());
+});
+
 test('plugin routes current and legacy APIs through identical trust checks and accepts actual UI create shape', async t => {
   const f = fixture(t), prefix = '/my-fish/api';
   assert.ok(f.routes.has('/x-whale/api'));

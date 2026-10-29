@@ -8,8 +8,9 @@ export function previewData(mode='solo') {
   const template={name:'My Fish',ownerTitle:'你',selfClaim:'我',persona:'你是一位通用本地助理。根据用户明确要求协助任务，清晰说明事实、来源和能力边界；不擅自扩大权限。',interests:[],queries:[]};
   const config={...structuredClone(DEFAULTS),...template,mode,owner:mode==='mention'?'example_user':''};
   const profile=Object.fromEntries(['name','ownerTitle','selfClaim','persona','interests'].map(key=>[key,structuredClone(config[key])]));
-  profile.id='default';
+  profile.id='default';profile.replyStyle='default';profile.emojiStyle='default';
   const settings=Object.fromEntries(['enabled','intervalMinutes','startHour','endHour','maxRunsDaily','maxCandidates'].map(key=>[key,config[key]]));
+  settings.snoozeUntil=null;
   const channels={ok:true,platforms:[
     {id:'x',name:'X',installed:true,implemented:true,available:true,configured:false,accountRequired:true,diagnostics:{supported:true,kind:'identity',scope:'仅检查保存账号的身份与本地权限配置'},connection:{state:'unconfigured',checkedAt:null,scope:'尚未检查账号身份'},currentSessionVisible:null,reads:['search','read','timeline'],actions:Object.fromEntries(['bookmark','reply','mention'].map(name=>[name,{supported:true,enabled:false,liveVerified:false}])),scope:'配置 X 账号后读取；写操作需要独立授权。',description:'X 专用适配器；账号和写权限在此管理。'},
     {id:'bilibili',name:'B站',installed:true,implemented:true,available:true,configured:false,accountRequired:false,diagnostics:{supported:true,kind:'public-read',scope:'匿名检查公共接口；无需账号，不执行写入'},connection:{state:'unchecked',checkedAt:null,scope:'匿名公开视频资料与有限评论；尚未发起真实读取'},currentSessionVisible:null,reads:['search','read','comments'],readAvailability:{search:{available:false,currentSessionVisible:null,reason:'此离线预览没有可核验的宿主 web_search。'},read:{available:true,currentSessionVisible:null},comments:{available:true,currentSessionVisible:null}},actions:{},scope:'搜索复用宿主 web_search 的公共 BV 链接摘要；匿名读取视频资料、简介和有限评论。',description:'无需 Cookie，不支持收藏、评论、点赞等写操作。'}

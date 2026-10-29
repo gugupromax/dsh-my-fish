@@ -20,6 +20,7 @@ function harness(options={}){
   if(options.channels!==undefined)data.channels=options.channels;
   if(options.config)Object.assign(data.remote.config,options.config);
   const server=structuredClone(data),requests=[];
+  const RuntimeDate=options.now===undefined?Date:class extends Date{constructor(...args){super(...(args.length?args:[options.now]));}static now(){return options.now;}};
   let model,plugin,effect,hasEffect=false,cleanup,intervalCallback,intervalDelay,clearedInterval;
   const react={
     createElement:(type,props,...children)=>({type,props:props||{},children}),
@@ -31,11 +32,18 @@ function harness(options={}){
     const route=url.slice('/my-fish/api/'.length),body=opts.body?JSON.parse(opts.body):undefined;
     requests.push({route,method:opts.method||'GET',body});
     if(route==='channels'&&options.onChannelsGet)await options.onChannelsGet();
+    if(route==='assistant'&&body===undefined&&options.onAssistantGet)await options.onAssistantGet();
     if(route==='channels/check'&&options.onChannelCheck)await options.onChannelCheck(body);
+    if(route==='assistant/snooze'&&options.onSnooze)await options.onSnooze(body);
     if(options.failRoute===route)return {ok:false,json:async()=>({ok:false,error:options.error||'连接失败'})};
     if(body===undefined)return {ok:true,json:async()=>structuredClone(route==='state'?server.remote:route==='plans'?server.plans:route==='permissions'?server.permissions:route==='workspace'?server.workspace:route==='channels'?server.channels:server.assistant)};
     if(route==='assistant/profile')server.assistant.profile={...server.assistant.profile,...body};
     else if(route==='assistant/settings')server.assistant.settings={...server.assistant.settings,...body};
+    else if(route==='assistant/snooze'){
+      const now=RuntimeDate.now(),midnight=new RuntimeDate(now);midnight.setDate(midnight.getDate()+1);midnight.setHours(0,0,0,0);
+      server.assistant.settings={...server.assistant.settings,snoozeUntil:body.preset==='resume'?null:body.preset==='today'?midnight.getTime():now+7200000};
+      return {ok:true,json:async()=>({ok:true,settings:structuredClone(server.assistant.settings),note:'临时免打扰已更新，原作息保持'})};
+    }
     else if(route==='config')server.remote.config=body;
     else if(route==='credentials')server.remote.hasCredentials=true;
     else if(route==='permissions')server.permissions.policy=body;
@@ -67,7 +75,7 @@ function harness(options={}){
     else if(route==='assistant/inbox-read')server.assistant.inbox=server.assistant.inbox.map(value=>value.id===body.id?{...value,readAt:5}:value);
     return {ok:true,json:async()=>({ok:true,note:route==='assistant/wake'?'任务已交给 DSH，尚未执行完成':'已保存'})};
   }
-  vm.runInNewContext(source,{window:{__ModuleLoader__:{load:entry=>{plugin=entry.factory(()=>react);}}},Date,JSON,URL,fetch:request,setInterval:(fn,delay)=>{intervalCallback=fn;intervalDelay=delay;return 123;},clearInterval:id=>{clearedInterval=id;}});
+  vm.runInNewContext(source,{window:{__ModuleLoader__:{load:entry=>{plugin=entry.factory(()=>react);}}},Date:RuntimeDate,JSON,URL,fetch:request,setInterval:(fn,delay)=>{intervalCallback=fn;intervalDelay=delay;return 123;},clearInterval:id=>{clearedInterval=id;}});
   const render=()=>plugin.Section(options.props||{});
   render();
   if(options.loaded!==false)model={...model,remote:data.remote,assistant:data.assistant,cfg:data.remote.config,profile:data.assistant.profile,settings:data.assistant.settings,plans:data.plans,channels:data.channels,policy:data.permissions.policy,capabilities:data.permissions.capabilities,workspace:data.workspace,workspaceDraft:{path:data.workspace.path},saved:{cfg:JSON.stringify(data.remote.config),profile:JSON.stringify(data.assistant.profile),settings:JSON.stringify(data.assistant.settings),policy:JSON.stringify(data.permissions.policy),workspaceDraft:JSON.stringify({path:data.workspace.path})}};
@@ -164,6 +172,145 @@ test('memory correction keeps the memory ID and forgetting removes it from the n
   await ui.click('忘记这条');
   assert.deepEqual(ui.requests.find(row=>row.route==='assistant/forget').body,{id:'memory-1'});
   assert.match(flatten(ui.render()),/还没有长期记忆/);
+});
+
+test('style shortcuts save separately while preserving the full original persona and identity',async()=>{
+  const persona='用户自行编辑的合成人设。\n保留原有换行与标点！',profile={...previewData().assistant.profile,persona,interests:[' 合成兴趣（保留空格） ']};
+  const ui=harness({assistant:{profile}});
+  ui.change('说话风格','concise');ui.change('表情符号','none');
+  await ui.click('保存角色');
+  const body=ui.requests.find(row=>row.route==='assistant/profile').body;
+  assert.equal(body.replyStyle,'concise');assert.equal(body.emojiStyle,'none');assert.equal(body.persona,persona);
+  for(const key of ['id','name','ownerTitle','selfClaim','interests'])assert.deepEqual(body[key],profile[key]);
+  assert.equal(ui.requests.filter(row=>row.method==='POST').length,1);
+});
+
+test('legacy role profiles default to following the existing persona without silently saving',async()=>{
+  const profile={...previewData().assistant.profile};delete profile.replyStyle;delete profile.emojiStyle;
+  const ui=harness({assistant:{profile}});
+  assert.equal(namedField(ui.render(),'说话风格').props.value,'default');assert.equal(namedField(ui.render(),'表情符号').props.value,'default');
+  assert.equal(ui.requests.length,0);assert.equal(namedButton(ui.render(),'保存角色').props.disabled,true);
+  ui.change('说话风格','formal');await ui.click('保存角色');
+  const body=ui.requests.find(row=>row.route==='assistant/profile').body;
+  assert.equal(body.replyStyle,'formal');assert.equal(body.emojiStyle,'default');assert.equal(body.persona,profile.persona);
+});
+
+test('failed style saves retain both choices and the original unsaved persona',async()=>{
+  const ui=harness({failRoute:'assistant/profile'});
+  ui.change('人设正文','合成的未保存人设');ui.change('说话风格','natural');ui.change('表情符号','moderate');
+  await ui.click('保存角色');
+  assert.equal(namedField(ui.render(),'说话风格').props.value,'natural');assert.equal(namedField(ui.render(),'表情符号').props.value,'moderate');
+  assert.equal(namedField(ui.render(),'人设正文').props.value,'合成的未保存人设');
+  assert.notEqual(ui.server.assistant.profile.persona,'合成的未保存人设');
+});
+
+test('temporary snooze updates only its saved state and preserves every unrelated draft',async()=>{
+  const now=new Date(2030,2,12,11,30).getTime(),ui=harness({now});
+  ui.change('间隔分钟（30–1440）','90');ui.change('允许助理主动跟进',undefined,true);
+  ui.change('人设正文','合成角色草稿');ui.change('说话风格','formal');ui.change('记忆内容','合成临时记忆');
+  const initialSettings={...ui.server.assistant.settings};
+  const tree=await ui.click('暂停2小时');
+  assert.deepEqual(ui.requests.find(row=>row.route==='assistant/snooze').body,{preset:'two-hours'});
+  assert.equal(ui.server.assistant.settings.snoozeUntil,now+7200000);assert.equal(ui.server.assistant.settings.enabled,initialSettings.enabled);
+  assert.equal(ui.server.assistant.settings.intervalMinutes,initialSettings.intervalMinutes);
+  assert.equal(namedField(tree,'间隔分钟（30–1440）').props.value,90);assert.equal(namedField(tree,'允许助理主动跟进').props.checked,true);
+  assert.equal(namedField(tree,'人设正文').props.value,'合成角色草稿');assert.equal(namedField(tree,'说话风格').props.value,'formal');assert.equal(namedField(tree,'记忆内容').props.value,'合成临时记忆');
+  assert.equal(ui.requests.filter(row=>row.method==='POST').length,1);assert.match(flatten(tree),/自主跟进暂停至/);
+  assert.match(flatten(tree),/手动唤醒和明确设置的定时计划照常可用/);
+  await ui.click('保存作息');
+  const saved=ui.requests.find(row=>row.route==='assistant/settings').body;
+  assert.deepEqual(Object.keys(saved).sort(),['enabled','intervalMinutes','startHour','endHour','maxRunsDaily','maxCandidates'].sort());
+  assert.equal(saved.intervalMinutes,90);assert.equal(ui.server.assistant.settings.snoozeUntil,now+7200000);
+});
+
+test('today snooze ends at local midnight and resuming does not enable autonomous followup',async()=>{
+  const now=new Date(2030,2,12,23,58).getTime(),ui=harness({now});
+  await ui.click('今天不主动跟进');
+  assert.equal(ui.server.assistant.settings.snoozeUntil,new Date(2030,2,13).getTime());
+  assert.equal(namedButton(ui.render(),'恢复主动跟进').props.disabled,false);
+  await ui.click('恢复主动跟进');
+  assert.equal(ui.server.assistant.settings.snoozeUntil,null);assert.equal(ui.server.assistant.settings.enabled,false);
+  assert.equal(namedButton(ui.render(),'恢复主动跟进').props.disabled,true);
+  assert.deepEqual(ui.requests.filter(row=>row.route==='assistant/snooze').map(row=>row.body),[{preset:'today'},{preset:'resume'}]);
+  assert.ok(!ui.requests.some(row=>row.method==='POST'&&row.route!=='assistant/snooze'));
+  const off=harness({now,assistant:{settings:{...previewData().assistant.settings,enabled:false,snoozeUntil:now-1}}});
+  off.change('允许助理主动跟进',undefined,true);
+  assert.match(flatten(off.render()),/临时暂停已到期；自主跟进总开关仍关闭/);
+  const on=harness({now,assistant:{settings:{...previewData().assistant.settings,enabled:true,snoozeUntil:now-1}}});
+  on.change('允许助理主动跟进',undefined,false);
+  assert.match(flatten(on.render()),/临时暂停已到期，后续按已保存作息执行/);
+  assert.ok(!flatten(on.render()).includes('自主跟进总开关仍关闭'));
+});
+
+test('snooze failure retains the previous deadline and schedule drafts',async()=>{
+  const now=Date.now(),settings={...previewData().assistant.settings,snoozeUntil:now+900000},ui=harness({now,assistant:{settings},failRoute:'assistant/snooze'});
+  ui.change('间隔分钟（30–1440）','60');await ui.click('恢复主动跟进');
+  assert.equal(ui.getModel().assistant.settings.snoozeUntil,settings.snoozeUntil);assert.equal(namedField(ui.render(),'间隔分钟（30–1440）').props.value,60);
+  assert.equal(namedButton(ui.render(),'恢复主动跟进').props.disabled,false);assert.match(flatten(ui.render()),/连接失败/);
+});
+
+test('an unknown snooze outcome with failed status refresh never presents the old deadline as current',async()=>{
+  let attempted=false;const now=Date.now(),settings={...previewData().assistant.settings,snoozeUntil:now+900000};
+  const ui=harness({now,assistant:{settings},failRoute:'assistant/snooze',onSnooze:()=>{attempted=true;},onAssistantGet:()=>{if(attempted)throw Error('状态读取失败');}});
+  ui.change('间隔分钟（30–1440）','60');await ui.click('恢复主动跟进');
+  const text=flatten(ui.render());
+  assert.match(text,/临时免打扰修改未确认/);assert.match(text,/状态读取失败/);assert.ok(!text.includes('自主跟进暂停至'));assert.ok(!text.includes('当前没有临时暂停'));
+  assert.equal(ui.getModel().settings.intervalMinutes,60);assert.equal(ui.getModel().assistant.settings.snoozeUntil,settings.snoozeUntil);
+});
+
+test('pending snooze freezes settings and leaves existing plans unchanged',async()=>{
+  let release;const plan={id:'synthetic-plan',taskId:'synthetic-plan',title:'既有明确计划',status:'active',schedule:{mode:'cron',cron:'0 9 * * *',timeZone:'Asia/Shanghai'}};
+  const ui=harness({plans:{plans:[plan]},onSnooze:()=>new Promise(resolve=>{release=resolve;})});
+  const pending=ui.click('暂停2小时');
+  assert.equal(namedField(ui.render(),'说话风格').props.disabled,true);assert.equal(namedField(ui.render(),'记忆有效期').props.disabled,true);
+  assert.equal(namedButton(ui.render(),'今天不主动跟进').props.disabled,true);assert.equal(namedButton(ui.render(),'现在唤醒').props.disabled,true);
+  release();await pending;
+  assert.deepEqual(ui.server.plans.plans,[plan]);assert.ok(!ui.requests.some(row=>row.route==='plans'&&row.method==='POST'));
+});
+
+test('memory today and week presets use local calendar boundaries including Sunday and Monday',async()=>{
+  for(const [now,mode,expected] of [[new Date(2026,10,1,17,45).getTime(),'today',new Date(2026,10,2).getTime()],[new Date(2026,10,1,17,45).getTime(),'week',new Date(2026,10,2).getTime()],[new Date(2026,10,2,8,15).getTime(),'week',new Date(2026,10,9).getTime()]]){
+    const ui=harness({now});ui.change('记忆内容','合成的临时偏好');ui.change('记忆有效期',mode);await ui.click('保存记忆');
+    const body=ui.requests.find(row=>row.route==='assistant/memory').body;
+    assert.equal(body.expiresAt,expected);assert.ok(!('expiryMode' in body));assert.ok(!('expiryAt' in body));
+  }
+});
+
+test('memory corrections preserve the precise existing expiry and allow explicit long-term retention',async()=>{
+  const now=new Date(2030,2,12).getTime(),expiresAt=now+987654321;
+  const ui=harness({now,assistant:{memories:[{id:'timed-memory',text:'合成记忆旧正文',category:'fact',source:'用户说明',expiresAt,createdAt:1,updatedAt:2}]}});
+  await ui.click('纠正这条记忆');assert.equal(namedField(ui.render(),'记忆有效期').props.value,'keep');
+  ui.change('记忆内容','合成记忆新正文');await ui.click('保存记忆');
+  assert.equal(ui.requests.find(row=>row.route==='assistant/memory').body.expiresAt,expiresAt);
+  await ui.click('纠正这条记忆');ui.change('记忆有效期','never');await ui.click('保存记忆');
+  assert.equal(ui.requests.filter(row=>row.route==='assistant/memory')[1].body.expiresAt,null);
+});
+
+test('custom memory expiry rejects empty invalid or past dates before submitting and preserves drafts',async()=>{
+  const now=new Date(2030,1,1,12).getTime(),ui=harness({now});
+  ui.change('记忆内容','合成自定记忆');ui.change('记忆有效期','custom');
+  for(const value of ['', 'not-a-date', '2030-02-30T15:00', '2030-01-31T15:00']){
+    ui.change('记忆到期时间',value);await ui.click('保存记忆');
+    assert.equal(ui.requests.filter(row=>row.route==='assistant/memory').length,0);assert.equal(namedField(ui.render(),'记忆内容').props.value,'合成自定记忆');
+  }
+  ui.change('记忆到期时间','2030-02-02T15:30');await ui.click('保存记忆');
+  assert.equal(ui.requests.find(row=>row.route==='assistant/memory').body.expiresAt,new Date(2030,1,2,15,30).getTime());
+  assert.equal(namedField(ui.render(),'记忆有效期').props.value,'never');
+});
+
+test('polling and failed memory saves retain custom expiry drafts and style choices',async()=>{
+  const ui=harness({failRoute:'assistant/memory'});await ui.mount();
+  ui.change('记忆内容','合成记忆草稿');ui.change('记忆有效期','custom');ui.change('记忆到期时间','2099-02-01T15:30');ui.change('说话风格','natural');
+  await ui.poll();await ui.click('保存记忆');
+  assert.equal(namedField(ui.render(),'记忆有效期').props.value,'custom');assert.equal(namedField(ui.render(),'记忆到期时间').props.value,'2099-02-01T15:30');
+  assert.equal(namedField(ui.render(),'记忆内容').props.value,'合成记忆草稿');assert.equal(namedField(ui.render(),'说话风格').props.value,'natural');ui.unmount();
+});
+
+test('an unfinished expiry choice protects navigation even before memory text is entered',()=>{
+  const ui=harness({remote:{sessionId:'synthetic-main'},props:{openAssistantSession:async()=>{},close:()=>{}}});
+  assert.equal(namedButton(ui.render(),'和助理聊天').props.disabled,false);
+  ui.change('记忆有效期','custom');
+  assert.equal(namedButton(ui.render(),'和助理聊天').props.disabled,true);
 });
 
 test('goal pause and completion update status without overwriting its details or check time',async()=>{

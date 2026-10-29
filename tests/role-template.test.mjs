@@ -16,5 +16,5 @@ test('neutral source defaults do not overwrite a locally saved custom profile',t
   assert.equal(assistant.profile().name,'My Fish');
   const custom={name:'LOCAL_ONLY_ROLE',ownerTitle:'LOCAL_USER',selfClaim:'LOCAL_SELF',persona:'Synthetic local-only persona',interests:['Synthetic local-only subject']};
   assistant.saveProfile(custom);const raw=fs.readFileSync(assistant.file('profile.json'),'utf8');
-  const reloaded=new AssistantStore(new Store(root));assert.deepEqual(reloaded.profile(),{id:'default',...custom});assert.equal(fs.readFileSync(reloaded.file('profile.json'),'utf8'),raw);
+  const reloaded=new AssistantStore(new Store(root));assert.deepEqual(reloaded.profile(),{id:'default',...custom,replyStyle:'default',emojiStyle:'default'});assert.equal(fs.readFileSync(reloaded.file('profile.json'),'utf8'),raw);
 });

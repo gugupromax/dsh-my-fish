@@ -19,9 +19,10 @@ try {
     hostImport('cordis'),hostImport('dsh-system-prompt'),
   ]);
   const store=new Store(temporaryRoot),assistant=new AssistantStore(store).initialize();
-  assistant.saveProfile({name:'HOST_PERSONA_SENTINEL'});
+  assistant.saveProfile({name:'HOST_PERSONA_SENTINEL',replyStyle:'concise',emojiStyle:'none'});
   store.saveState({...store.state(),sessionId:'synthetic-personal-session',activeRun:{id:'synthetic-active-run',query:'host-memory-probe'}});
   const memory=assistant.remember({text:'host-memory-probe original-synthetic-value',category:'fact',source:'Synthetic local host integration fixture'});
+  assistant.remember({text:'host-memory-probe EXPIRED_SYNTHETIC_VALUE',category:'fact',source:'Synthetic expired fixture',expiresAt:Date.now()-1});
   const ctx=new Context();
   const promptFiber=ctx.plugin(SystemPrompt,{includeHarnessIdentity:false});fibers.push(promptFiber);
   await promptFiber;
@@ -37,13 +38,18 @@ try {
   const ordinary=visible(await assemble('synthetic-ordinary-session'));
   assert.ok(!ordinary.includes('HOST_PERSONA_SENTINEL'));
   assert.ok(!ordinary.includes('original-synthetic-value'));
+  assert.ok(!ordinary.includes('说话风格：简短'));
   const initial=visible(await assemble('synthetic-personal-session'));
   assert.ok(initial.includes('HOST_PERSONA_SENTINEL'));
   assert.ok(initial.includes('original-synthetic-value'));
+  assert.ok(initial.includes('说话风格：简短'));assert.ok(initial.includes('表情符号：不使用'));
+  assert.ok(!initial.includes('EXPIRED_SYNTHETIC_VALUE'));
   assistant.remember({id:memory.id,text:'host-memory-probe corrected-synthetic-value'});
+  assistant.saveProfile({replyStyle:'formal'});
   const corrected=visible(await assemble('synthetic-personal-session'));
   assert.ok(corrected.includes('corrected-synthetic-value'));
   assert.ok(!corrected.includes('original-synthetic-value'));
+  assert.ok(corrected.includes('说话风格：正式'));assert.ok(!corrected.includes('说话风格：简短'));
   const disposeComplete=ctx.systemPrompt.section({name:'synthetic:complete-preset',order:0,complete:true,text:'SYNTHETIC_COMPLETE_PROMPT'});
   const disposeSuppression=ctx.systemPrompt.suppressRuntimeContext();
   try {
@@ -70,4 +76,4 @@ try {
   assert.ok(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative),'Temporary cleanup target must remain under the OS temporary directory');
   fs.rmSync(temporaryRoot,{recursive:true,force:true});
 }
-if(cleanupComplete)console.log(JSON.stringify({hostPersonalContext:'passed',ordinarySessionIsolation:'passed',currentMemory:'passed',correctionRefresh:'passed',forgetRefresh:'passed',completePresetWithSuppression:'passed',disposal:'passed',temporaryDataCleanup:'passed'}));
+if(cleanupComplete)console.log(JSON.stringify({hostPersonalContext:'passed',ordinarySessionIsolation:'passed',styleIsolationAndRefresh:'passed',expiredMemoryExclusion:'passed',currentMemory:'passed',correctionRefresh:'passed',forgetRefresh:'passed',completePresetWithSuppression:'passed',disposal:'passed',temporaryDataCleanup:'passed'}));
