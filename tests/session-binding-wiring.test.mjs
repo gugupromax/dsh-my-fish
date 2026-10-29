@@ -8,14 +8,15 @@ import plugin from '../lib/index.js';
 import {Store} from '../lib/store.js';
 
 function fixture(t,{fresh=false}={}){
-  const home=fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-native-binding-wiring-')),previous=process.env.DSH_HOME;process.env.DSH_HOME=home;
+  const temporaryParent=fs.realpathSync.native(os.tmpdir());
+  const home=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-native-binding-wiring-'))),previous=process.env.DSH_HOME;process.env.DSH_HOME=home;
   const store=new Store();fs.mkdirSync(store.file('workspace'),{recursive:true});store.saveState({...store.state(),sessionId:fresh?null:'synthetic-loose-main'});
   const live=new Map(),headers=new Map(),calls={create:[],prompt:[],attach:[]},effects=[],routes=new Map(),tools=new Map(),guards=[];
   const group={id:'synthetic-workspace',title:'Synthetic group',path:store.root,sessionIds:fresh?[]:['synthetic-existing-main'],attachSession:async id=>{calls.attach.push(id);if(!group.sessionIds.includes(id))group.sessionIds.push(id);}};
   for(const [id,cwd] of [['synthetic-loose-main',store.file('workspace')],['synthetic-existing-main',store.root]]){const header={id,cwd,isSeeded:false,createdAt:1};headers.set(id,header);live.set(id,{id,header});}
   const services={
     sessions:{get:id=>live.get(id)},sessionPersistence:{stat:async id=>headers.has(id)?{header:headers.get(id),revision:'synthetic-revision'}:undefined},
-    agents:{list:()=>[],isOwnedBy:()=>false},workspaceRegistry:{list:()=>[group],get:id=>id===group.id?group:undefined,resolveByPath:cwd=>path.resolve(cwd)===path.resolve(group.path)?group:undefined,archivedSessionIds:[]},
+    agents:{list:()=>[],isOwnedBy:()=>false},workspaceRegistry:{list:()=>[group],get:id=>id===group.id?group:undefined,resolveByPath:async cwd=>(await fs.promises.realpath(cwd))===(await fs.promises.realpath(group.path))?group:undefined,archivedSessionIds:[]},
   };
   const ctx={
     sessionController:{create:async request=>{calls.create.push(request);assert.equal(request.workspaceId,group.id);assert.equal(Object.hasOwn(request,'cwd'),false);const sessionId='synthetic-actual-returned-id',header={id:sessionId,cwd:group.path,isSeeded:false,createdAt:2};headers.set(sessionId,header);live.set(sessionId,{id:sessionId,header});group.sessionIds.push(sessionId);return {sessionId};},prompt:async request=>{calls.prompt.push(request);}},
@@ -25,7 +26,7 @@ function fixture(t,{fresh=false}={}){
     inject:(names,callback)=>{if(names.every(name=>services[name]))callback({...Object.fromEntries(names.map(name=>[name,services[name]])),effect:fn=>{const dispose=fn();if(typeof dispose==='function')effects.push(dispose);}});},
     effect:fn=>{const dispose=fn();if(typeof dispose==='function')effects.push(dispose);},
   };plugin.apply(ctx);
-  t.after(()=>{for(const dispose of effects.reverse())dispose();if(previous===undefined)delete process.env.DSH_HOME;else process.env.DSH_HOME=previous;assert.equal(path.dirname(path.resolve(home)),path.resolve(os.tmpdir()));fs.rmSync(home,{recursive:true,force:true});});
+  t.after(()=>{for(const dispose of effects.reverse())dispose();if(previous===undefined)delete process.env.DSH_HOME;else process.env.DSH_HOME=previous;assert.equal(path.dirname(path.resolve(home)),temporaryParent);fs.rmSync(home,{recursive:true,force:true});});
   async function http(prefix,method,route,body,headers={}){
     const req=Readable.from(body===undefined?[]:[Buffer.from(JSON.stringify(body))]);req.method=method;req.url=prefix+'/'+route;req.socket={remoteAddress:'127.0.0.1'};
     req.headers={host:'127.0.0.1:3000',origin:'http://127.0.0.1:3000','content-type':'application/json',...headers};

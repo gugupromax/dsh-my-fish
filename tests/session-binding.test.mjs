@@ -7,9 +7,10 @@ import {Store,atomic} from '../lib/store.js';
 import {SessionBinding} from '../lib/session-binding.js';
 
 function fixture(t){
-  const home=fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-binding-')),root=path.join(home,'data'),other=path.join(home,'other');
-  fs.mkdirSync(root);fs.mkdirSync(other);
-  t.after(()=>{assert.equal(path.dirname(path.resolve(home)),path.resolve(os.tmpdir()));fs.rmSync(home,{recursive:true,force:true});});
+  const temporaryBase=fs.realpathSync.native(os.tmpdir()),home=fs.realpathSync.native(fs.mkdtempSync(path.join(temporaryBase,'my-fish-binding-')));
+  fs.mkdirSync(path.join(home,'data'));fs.mkdirSync(path.join(home,'other'));
+  const root=fs.realpathSync.native(path.join(home,'data')),other=fs.realpathSync.native(path.join(home,'other'));
+  t.after(()=>{const relative=path.relative(temporaryBase,path.resolve(home));assert.ok(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative));assert.equal(path.dirname(path.resolve(home)),temporaryBase);fs.rmSync(home,{recursive:true,force:true});});
   const store=new Store(root),headers=new Map(),live=new Map(),workspaces=new Map(),calls={create:0,attach:0,stat:0,save:0};
   const old='synthetic-old-main',target='synthetic-target-main';
   const header=(id,cwd=root,extra={})=>({version:4,id,cwd,createdAt:123,isSeeded:false,...extra});
@@ -17,10 +18,10 @@ function fixture(t){
   const agents=[{id:old,session:{id:old},status:'idle'},{id:target,session:{id:target},status:'idle'}],owners=new Map();
   const runtime={list:()=>agents,isOwnedBy:(id,owner)=>agents.some(agent=>agent.id===id&&owners.get(agent)===owner)};
   const entity=(id,directory,members=[])=>({id,title:'Synthetic '+id,path:directory,sessionIds:[...members],attachSession:async sessionId=>{
-    calls.attach++;const row=headers.get(sessionId);assert.ok(row);assert.equal(fs.realpathSync(row.cwd),fs.realpathSync(directory));
+    calls.attach++;const row=headers.get(sessionId);assert.ok(row);assert.equal(fs.realpathSync.native(row.cwd),fs.realpathSync.native(directory));
     const workspace=workspaces.get(id);if(!workspace.sessionIds.includes(sessionId))workspace.sessionIds.push(sessionId);
   }});
-  const registry={get:id=>workspaces.get(id),list:()=>[...workspaces.values()],archivedSessionIds:[],resolveByPath:async directory=>[...workspaces.values()].find(item=>fs.realpathSync(item.path)===fs.realpathSync(directory)),create:async(directory,title)=>{
+  const registry={get:id=>workspaces.get(id),list:()=>[...workspaces.values()],archivedSessionIds:[],resolveByPath:async directory=>[...workspaces.values()].find(item=>fs.realpathSync.native(item.path)===fs.realpathSync.native(directory)),create:async(directory,title)=>{
     calls.create++;const workspace=entity('synthetic-created-workspace-'+calls.create,directory);workspace.title=title;workspaces.set(workspace.id,workspace);return workspace;
   }};
   const workspace=entity('synthetic-root-workspace',root,[target]);workspaces.set(workspace.id,workspace);
@@ -163,4 +164,19 @@ test('an unrelated offline workspace does not prevent selecting the valid defaul
   const snapshot=await f.binding.snapshot();assert.equal(snapshot.available,true);assert.equal(snapshot.selectedWorkspaceId,f.workspace.id);assert.deepEqual(snapshot.candidates.map(item=>item.id),[f.target]);
   await assert.rejects(()=>f.binding.snapshot('synthetic-offline'),/目录不可用/);
   assert.equal(f.calls.create,0);assert.equal(f.calls.save,0);
+});
+
+test('a directory resolver miss falls back to canonical membership without registering a duplicate group',async t=>{
+  const f=fixture(t),alias=path.join(f.home,'synthetic-data-alias');
+  fs.symlinkSync(f.root,alias,process.platform==='win32'?'junction':'dir');
+  f.workspace.path=alias;
+  f.workspaces.clear();f.workspaces.set('synthetic-offline',f.entity('synthetic-offline',path.join(f.home,'offline-directory')));f.workspaces.set(f.workspace.id,f.workspace);
+  f.registry.resolveByPath=async()=>undefined;
+  const snapshot=await f.binding.snapshot();
+  assert.equal(snapshot.selectedWorkspaceId,f.workspace.id);assert.deepEqual(snapshot.candidates.map(item=>item.id),[f.target]);
+  assert.deepEqual(await f.binding.creationLocation(),{workspaceId:f.workspace.id,cwd:fs.realpathSync.native(f.root)});assert.equal(f.calls.create,0);
+  f.registry.resolveByPath=undefined;
+  assert.equal((await f.binding.snapshot()).selectedWorkspaceId,f.workspace.id);assert.equal(f.calls.create,0);
+  const wrong=f.entity('synthetic-wrong-resolver-result',f.other);f.workspaces.set(wrong.id,wrong);f.registry.resolveByPath=async()=>wrong;
+  await assert.rejects(()=>f.binding.snapshot(),/不同|不匹配/);await assert.rejects(()=>f.binding.creationLocation(),/不同|不匹配/);assert.equal(f.calls.create,0);
 });

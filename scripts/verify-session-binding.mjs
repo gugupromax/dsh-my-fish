@@ -14,7 +14,8 @@ import {createSessionProbe} from '../lib/session-presence.js';
 
 const hostRoot=process.argv[2]||'D:/Program Files/DeepSeek Harness/resources/app.asar/dsh/node_modules';
 const hostImport=name=>import(pathToFileURL(path.join(hostRoot,'@deepseek-ai',name,'lib/index.js')).href);
-const temporaryRoot=fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-session-binding-host-'));
+const temporaryParent=fs.realpathSync.native(os.tmpdir());
+const temporaryRoot=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-session-binding-host-')));
 const selected=path.join(temporaryRoot,'selected'),other=path.join(temporaryRoot,'other');
 for(const directory of [selected,other])fs.mkdirSync(directory);
 const fibers=[],disposers=[];
@@ -130,7 +131,7 @@ try{
 }finally{
   for(const dispose of disposers.reverse())await dispose();
   for(const fiber of fibers.reverse())await fiber.dispose();
-  const relative=path.relative(path.resolve(os.tmpdir()),path.resolve(temporaryRoot));
+  const relative=path.relative(temporaryParent,path.resolve(temporaryRoot));
   assert.ok(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative));
   fs.rmSync(temporaryRoot,{recursive:true,force:true});
 }
