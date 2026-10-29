@@ -83,6 +83,6 @@ test('package, lockfile and Cordis identity agree on the release name',()=>{
   const pkg=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
   const lock=JSON.parse(fs.readFileSync(new URL('../package-lock.json',import.meta.url),'utf8'));
   assert.equal(pkg.name,'dsh-my-fish');assert.equal(lock.name,pkg.name);assert.equal(lock.packages[''].name,pkg.name);
-  assert.equal(pkg.version,'0.5.0');assert.equal(lock.version,pkg.version);assert.equal(lock.packages[''].version,pkg.version);
+  assert.equal(pkg.version,'0.5.1');assert.equal(lock.version,pkg.version);assert.equal(lock.packages[''].version,pkg.version);
   assert.match(fs.readFileSync(new URL('../cordis.patch.yml',import.meta.url),'utf8'),/id: dsh-my-fish\s+name: dsh-my-fish/);
 });
