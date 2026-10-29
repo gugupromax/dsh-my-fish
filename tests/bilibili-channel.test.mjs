@@ -16,7 +16,43 @@ test('Bilibili capability distinguishes runtime support, session visibility and 
   assert.equal(status.readAvailability.read.available,true);assert.equal(status.readAvailability.comments.available,true);assert.equal(calls,0);
   for(const action of Object.values(status.actions))assert.deepEqual(action,{supported:false,enabled:false,liveVerified:false});
   assert.equal(adapter.action,undefined);assert.equal(adapter.timeline,undefined);
+  assert.equal(status.diagnostics.supported,true);assert.equal(status.diagnostics.kind,'public-read');
   const unavailable=createBilibiliAdapter({fetchImpl:null});assert.equal(unavailable.capabilities(context()).available,false);assert.equal(unavailable.capabilities(context()).readAvailability.read.available,false);
+  assert.equal(unavailable.capabilities().diagnostics.supported,false);
+});
+
+test('Bilibili diagnostics use one fixed anonymous metadata GET and do not inspect accounts or comments',async()=>{
+  const requests=[],adapter=createBilibiliAdapter({store:forbiddenStore,now:()=>1234,getTools:()=>{throw Error('Check must not use host tools');},fetchImpl:async(...args)=>{
+    requests.push(args);return payload(metadata({bvid:'BV1GJ411x7h7',title:'合成检查视频',cookie:'SYNTHETIC_PRIVATE_VALUE'}));
+  }});
+  const result=await adapter.check(new AbortController().signal);
+  assert.equal(requests.length,1);assert.equal(requests[0][0],'https://api.bilibili.com/x/web-interface/view?bvid=BV1GJ411x7h7');
+  const options=requests[0][1];assert.equal(options.method,'GET');assert.equal(options.credentials,'omit');assert.equal(options.redirect,'error');assert.deepEqual(options.headers,{accept:'application/json'});
+  assert.equal(result.ok,true);assert.equal(result.checks.connection.status,'verified');assert.equal(result.checks.connection.checkedAt,1234);
+  assert.equal(result.checks.identity.status,'not-applicable');assert.match(result.checks.permissions.scope,/不支持/);
+  assert.equal(JSON.stringify(result).includes('SYNTHETIC_PRIVATE_VALUE'),false);assert.equal(result.items,undefined);
+  assert.equal(adapter.capabilities().readAvailability.read.connection.state,'verified');
+  assert.equal(adapter.capabilities().readAvailability.comments.connection.state,'unchecked');assert.equal(adapter.capabilities().readAvailability.search.connection.state,'unchecked');
+  assert.match(adapter.capabilities().connection.scope,/未检查搜索、评论、账号或写入权限/);
+});
+
+test('Bilibili diagnostics preserve restriction cooldown and never retry after HTTP or platform denials',async()=>{
+  for(const makeResponse of [()=>new Response('',{status:429}),()=>new Response(JSON.stringify({code:-352}),{headers:{'content-type':'application/json'}})]){
+    let calls=0,time=1000;const adapter=createBilibiliAdapter({now:()=>time,fetchImpl:async()=>{calls++;return makeResponse();}});
+    await assert.rejects(adapter.check(),/停止/);assert.equal(calls,1);assert.equal(adapter.capabilities().connection.state,'failed');
+    await assert.rejects(adapter.check(),/冷却期/);await assert.rejects(adapter.read({reference:BV}),/冷却期/);assert.equal(calls,1);
+    time+=5*60*1000;assert.equal(adapter.capabilities().readAvailability.read.available,true);
+  }
+});
+
+test('Bilibili diagnostics reuse cancellation, busy rejection and hard timeout',async t=>{
+  const controller=new AbortController();let calls=0;
+  const adapter=createBilibiliAdapter({fetchImpl:()=>{calls++;return new Promise(()=>{});}});
+  const request=adapter.check(controller.signal);await assert.rejects(adapter.check(),/正在运行/);assert.equal(calls,1);
+  controller.abort(new Error('synthetic-check-cancel'));await assert.rejects(request,/synthetic-check-cancel/);
+  await assert.rejects(adapter.check(controller.signal),/synthetic-check-cancel/);assert.equal(calls,1);
+  t.mock.timers.enable({apis:['setTimeout']});
+  const timeout=adapter.check();t.mock.timers.tick(15000);await assert.rejects(timeout,/超时/);assert.equal(calls,2);assert.equal(adapter.capabilities().connection.state,'failed');
 });
 
 test('Bilibili read only fetches the fixed anonymous view endpoint and returns bounded metadata',async()=>{

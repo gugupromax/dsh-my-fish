@@ -153,6 +153,110 @@ test('an aborted call stops before a registered provider request', () => {
   assert.equal(requests.length, 0);
 });
 
+test('trusted channel checks bypass initial account and connection gates and project provider results', async () => {
+  const { social, requests } = fixture(), calls = [], secret = 'SYNTHETIC_PRIVATE_VALUE';
+  const signal = new AbortController().signal, exec = { agent: { id: 'synthetic-session' } };
+  social.register({ id: 'diagnostic', capabilities: () => ({
+    implemented: true, available: false, configured: false, accountRequired: true, currentSessionVisible: false,
+    diagnostics: { supported: true, kind: 'identity', scope: '只读检查' }, connection: { state: 'unchecked' },
+    actions: { reply: { supported: true, enabled: false, liveVerified: false } },
+  }), action: () => { throw Error('Must not write'); }, check: (...args) => {
+    calls.push(args); return { ok: true, config: secret, token: secret, persona: secret,
+      checks: { connection: { status: 'verified', checkedAt: 123, scope: '合成请求', token: secret },
+        identity: { status: 'verified', username: 'fixture_bot', id: secret, config: secret },
+        permissions: { status: 'verified', liveWritesChecked: true, actions: { reply: { enabled: true } }, token: secret }, credentials: secret },
+      note: '仅只读检查', channel: { config: secret },
+    };
+  } });
+  const result = await social.check({ platform: 'diagnostic', reference: secret }, signal, exec);
+  assert.deepEqual(calls, [[signal, exec]]); assert.equal(requests.length, 0);
+  assert.equal(result.ok, true); assert.equal(result.platform, 'diagnostic');
+  assert.equal(result.channel.id, 'diagnostic'); assert.equal(result.channel.configured, false);
+  assert.equal(result.checks.connection.status, 'verified'); assert.equal(result.checks.connection.checkedAt, 123);
+  assert.deepEqual(result.checks.identity, { status: 'verified', scope: '', username: 'fixture_bot' });
+  assert.equal(result.checks.permissions.status, 'configuration-only'); assert.equal(result.checks.permissions.liveWritesChecked, false);
+  assert.deepEqual(result.checks.permissions.actions, result.channel.actions);
+  assert.equal(result.checks.permissions.actions.reply.enabled, false);
+  assert.equal(JSON.stringify(result).includes(secret), false);
+});
+
+test('unsupported, unimplemented and aborted checks make no provider requests', async () => {
+  const { social } = fixture(); let calls = 0;
+  const check = () => { calls++; return { ok: true }; };
+  social.register({ id: 'missing_method', capabilities: () => ({ diagnostics: { supported: true } }) });
+  social.register({ id: 'undeclared', capabilities: () => ({}), check });
+  social.register({ id: 'planned', capabilities: () => ({ implemented: false, diagnostics: { supported: true } }), check });
+  social.register({ id: 'implemented', capabilities: () => ({ diagnostics: { supported: true } }), check });
+  for (const platform of ['missing_method', 'undeclared', 'planned']) await assert.rejects(social.check({ platform }), /尚未支持/);
+  await assert.rejects(social.check({ platform: 'missing' }), /尚未接入/);
+  const controller = new AbortController(); controller.abort(new Error('synthetic-check-cancel'));
+  await assert.rejects(social.check({ platform: 'implemented' }, controller.signal), /synthetic-check-cancel/);
+  assert.equal(calls, 0);
+});
+
+test('channel checks reject duplicate concurrent requests and release the gate after failure', async () => {
+  const { social } = fixture(); let calls = 0, rejectFirst;
+  social.register({ id: 'serial_check', capabilities: () => ({ diagnostics: { supported: true } }), check: () => {
+    calls++; return calls === 1 ? new Promise((_resolve, reject) => { rejectFirst = reject; }) : { ok: true };
+  } });
+  const first = social.check({ platform: 'serial_check' });
+  await assert.rejects(social.check({ platform: 'serial_check' }), /正在运行/);
+  assert.equal(calls, 1); rejectFirst(new Error('synthetic-check-failure')); await assert.rejects(first, /synthetic-check-failure/);
+  assert.equal((await social.check({ platform: 'serial_check' })).ok, true); assert.equal(calls, 2);
+});
+
+test('X check calls diagnose directly and exposes only public identity and configured action switches', async () => {
+  const { social, config, state, engine, requests } = fixture(), secret = 'SYNTHETIC_PRIVATE_VALUE';
+  const originalConfig = structuredClone(config), signal = new AbortController().signal;
+  state.identity = null; state.inflight = 'synthetic-uncertain-receipt'; state.pausedUntil = 123;
+  engine.serial = () => { throw Error('Do not nest diagnose in serial'); };
+  let calls = 0;
+  engine.diagnose = async received => { calls++; assert.equal(received, signal); state.identity = { username: config.aiUsername, checkedAt: 456 };
+    return { ok: true, identity: { username: config.aiUsername, id: secret, cookie: secret }, config: secret, persona: secret };
+  };
+  assert.equal(social.capabilities().platforms[0].connection.state, 'unchecked');
+  const result = await social.check({ platform: 'x' }, signal);
+  assert.equal(calls, 1); assert.equal(requests.length, 0);
+  assert.equal(result.channel.connection.state, 'verified'); assert.equal(result.checks.connection.checkedAt, 456);
+  assert.equal(result.checks.identity.username, config.aiUsername); assert.equal(result.checks.identity.status, 'verified');
+  assert.equal(result.checks.permissions.liveWritesChecked, false); assert.equal(result.checks.permissions.actions.reply.enabled, false);
+  assert.equal(state.inflight, 'synthetic-uncertain-receipt'); assert.equal(state.pausedUntil, 123);
+  assert.deepEqual(config, originalConfig); assert.equal(JSON.stringify(result).includes(secret), false);
+});
+
+test('real X diagnostics preserve configuration and receipt locks and failed checks clear verified identity', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'my-fish-check-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new Store(root);
+  store.saveConfig({ ...DEFAULTS, aiUsername: 'fixture_bot' });
+  fs.writeFileSync(store.file('credentials.json'), 'SYNTHETIC_EXISTENCE_MARKER_NOT_A_CREDENTIAL');
+  const originalConfig = store.config(), state = store.state();
+  state.inflight = 'synthetic-lock'; state.ledger = [{ id: 'synthetic-lock', status: 'uncertain', text: '合成回执' }]; store.saveState(state);
+  let calls = 0, mismatch = false;
+  const engine = new Engine(store, async (_store, op) => { calls++; assert.equal(op, 'identity'); return { id: '12345', username: mismatch ? 'other_fixture' : 'fixture_bot' }; }, () => 10000, async () => {});
+  const social = new Social(engine, store);
+  const success = await social.check({ platform: 'x' });
+  assert.equal(success.checks.identity.status, 'verified'); assert.equal(success.channel.connection.state, 'verified');
+  assert.equal(store.state().inflight, 'synthetic-lock'); assert.deepEqual(store.state().ledger, state.ledger);
+  mismatch = true; await assert.rejects(social.check({ platform: 'x' }), /不一致/);
+  assert.equal(social.capabilities().platforms[0].connection.state, 'failed'); assert.equal(store.state().identity, null);
+  assert.equal(store.state().inflight, 'synthetic-lock'); assert.deepEqual(store.config(), originalConfig); assert.equal(calls, 2);
+  const paused = store.state(); paused.pausedUntil = 20000; paused.pauseReason = '合成限流'; store.saveState(paused);
+  await assert.rejects(social.check({ platform: 'x' }), /已暂停/); assert.equal(calls, 2);
+  assert.equal(store.state().pausedUntil, 20000); assert.equal(store.state().inflight, 'synthetic-lock');
+});
+
+test('X checks retain Engine missing-account errors instead of blocking first-time diagnosis', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'my-fish-first-check-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const store = new Store(root); let calls = 0;
+  const social = new Social(new Engine(store, async () => { calls++; throw Error('合成缺少凭据'); }), store);
+  await assert.rejects(social.check({ platform: 'x' }), /先填写/); assert.equal(calls, 0);
+  store.saveConfig({ ...DEFAULTS, aiUsername: 'fixture_bot' });
+  await assert.rejects(social.check({ platform: 'x' }), /合成缺少凭据/); assert.equal(calls, 1);
+  assert.equal(store.config().aiUsername, 'fixture_bot'); assert.equal(store.state().identity, null);
+});
+
 test('X provider keeps real Engine evidence, identity, quota, duplicate and receipt gates using synthetic storage', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'my-fish-social-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));

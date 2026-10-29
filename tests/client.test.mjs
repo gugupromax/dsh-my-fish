@@ -31,12 +31,19 @@ function harness(options={}){
     const route=url.slice('/my-fish/api/'.length),body=opts.body?JSON.parse(opts.body):undefined;
     requests.push({route,method:opts.method||'GET',body});
     if(route==='channels'&&options.onChannelsGet)await options.onChannelsGet();
+    if(route==='channels/check'&&options.onChannelCheck)await options.onChannelCheck(body);
     if(options.failRoute===route)return {ok:false,json:async()=>({ok:false,error:options.error||'连接失败'})};
     if(body===undefined)return {ok:true,json:async()=>structuredClone(route==='state'?server.remote:route==='plans'?server.plans:route==='permissions'?server.permissions:route==='workspace'?server.workspace:route==='channels'?server.channels:server.assistant)};
     if(route==='assistant/profile')server.assistant.profile={...server.assistant.profile,...body};
     else if(route==='assistant/settings')server.assistant.settings={...server.assistant.settings,...body};
     else if(route==='config')server.remote.config=body;
+    else if(route==='credentials')server.remote.hasCredentials=true;
     else if(route==='permissions')server.permissions.policy=body;
+    else if(route==='channels/check'){
+      const channel=server.channels.platforms.find(row=>row.id===body.platform),result=options.channelCheckResult||{ok:true,platform:body.platform,channel:{...channel,connection:{state:'verified',checkedAt:123,scope:body.platform==='x'?'仅账号身份接口':'仅匿名公共接口'}},checks:{identity:body.platform==='x'?{status:'verified',username:'synthetic_x',scope:'仅账号身份'}:{status:'not-applicable'},permissions:{status:'configuration-only',liveWritesChecked:false,scope:'仅核对配置，未做写入实测'},connection:{state:'verified'}},note:'检查已完成，仅核对配置，未做写入实测'};
+      if(result.channel?.id===body.platform)server.channels.platforms=server.channels.platforms.map(row=>row.id===body.platform?result.channel:row);
+      return {ok:true,json:async()=>structuredClone(result)};
+    }
     else if(route==='session/followup-resume'){if(server.remote.sessionRecovery)server.remote.sessionRecovery={...server.remote.sessionRecovery,followupPaused:false};return {ok:true,json:async()=>({ok:true,note:'已解除会话恢复暂停，后续仍按原作息运行'})};}
     else if(route==='workspace'){
       if(options.onWorkspacePost)await options.onWorkspacePost(body);
@@ -71,13 +78,14 @@ function harness(options={}){
     async poll(){await intervalCallback();return render();},
     unmount(){cleanup?.();},getInterval:()=>({delay:intervalDelay,cleared:clearedInterval}),
     change(label,value,checked){namedField(render(),label).props.onChange({target:{value,checked}});return render();},
-    async click(label){const button=namedButton(render(),label);assert.equal(button.props.disabled,false,'button enabled: '+label);await button.props.onClick();return render();}
+    async click(label){const button=namedButton(render(),label);assert.equal(button.props.disabled,false,'button enabled: '+label);await button.props.onClick();return render();},
+    async checkChannel(id){const button=namedButton(channelCard(render(),id),'检查连接与权限');assert.equal(button.props.disabled,false,'channel check enabled: '+id);await button.props.onClick();return render();}
   };
 }
 
 test('personal assistant opens with honest empty states and keeps platform setup separate',()=>{
   const solo=flatten(previewTree('solo')),paired=flatten(previewTree('mention'));
-  for(const label of ['现在唤醒','助理消息','正在跟进','还没有新消息','还没有目标','长期记忆','角色名','人设正文','渠道与账号','连接体检','允许公开回复','保存 X 设置'])assert.ok(solo.includes(label),label);
+  for(const label of ['现在唤醒','助理消息','正在跟进','还没有新消息','还没有目标','长期记忆','角色名','人设正文','渠道与账号','检查连接与权限','允许公开回复','保存 X 设置'])assert.ok(solo.includes(label),label);
   assert.ok(!solo.includes('接收通知的用户名'));assert.ok(paired.includes('接收通知的用户名'));
   assert.ok(!solo.includes('搜索词，每行一项'));
   const html=previewHTML();
@@ -120,7 +128,7 @@ test('refresh preserves unsaved role, schedule and X drafts and blocks inconsist
   ui.change('间隔分钟（30–1440）','90');
   ui.change('AI 账号用户名','another_user');
   assert.equal(namedButton(ui.render(),'现在唤醒').props.disabled,true);
-  assert.equal(namedButton(ui.render(),'连接体检').props.disabled,true);
+  assert.equal(namedButton(channelCard(ui.render(),'x'),'检查连接与权限').props.disabled,true);
   ui.server.assistant.profile.name='远端名字';
   ui.server.remote.config.aiUsername='server_user';
   await ui.click('刷新动态');
@@ -191,10 +199,9 @@ test('inbox keeps source links safe and marking read stays local',async()=>{
   assert.ok(!ui.requests.some(row=>/reply|mention|bookmark/.test(row.route)));
 });
 
-test('X failures stay visible, errors hide entered Cookie values, and sensitive remote fields never render',async()=>{
-  const ui=harness({remote:{credentials:{auth_token:'REMOTE_SECRET_CANARY'},lastDiagnosis:{at:5,status:'failed',message:'无法连接 X，请检查代理'},lastRead:{at:6,operation:'search',status:'failed',kind:'ReadTimeout',message:'读取失败',details:'DO_NOT_RENDER'},sessionId:'dedicated-session'},failRoute:'diagnose',error:'auth_token=entered-secret ct0=another-secret'});
-  ui.setModel({cookie:{auth_token:'entered-secret',ct0:'another-secret'}});
-  await ui.click('连接体检');
+test('X failures stay visible, errors hide Cookie assignments, and sensitive remote fields never render',async()=>{
+  const ui=harness({remote:{credentials:{auth_token:'REMOTE_SECRET_CANARY'},lastDiagnosis:{at:5,status:'failed',message:'无法连接 X，请检查代理'},lastRead:{at:6,operation:'search',status:'failed',kind:'ReadTimeout',message:'读取失败',details:'DO_NOT_RENDER'},sessionId:'dedicated-session'},failRoute:'channels/check',error:'auth_token=entered-secret ct0=another-secret'});
+  await ui.checkChannel('x');
   const text=flatten(ui.render());
   assert.match(text,/无法连接 X/);assert.match(text,/ReadTimeout/);assert.match(text,/dedicated-session/);
   assert.ok(!text.includes('REMOTE_SECRET_CANARY'));assert.ok(!text.includes('DO_NOT_RENDER'));assert.ok(!text.includes('entered-secret'));assert.ok(!text.includes('another-secret'));
@@ -202,7 +209,7 @@ test('X failures stay visible, errors hide entered Cookie values, and sensitive 
 
 test('browser transport stays explicit and writing remains separately controlled',()=>{
   const ui=harness(),text=flatten(ui.render());
-  for(const label of ['接入方式','Cookie + 独立浏览器（推荐）','旧 Cookie 接口（实验）','独立临时浏览器配置','不读取你日常 Chrome 的数据','不会在失败时静默互相回退','X 账号设置','接入状态：已实现'])assert.ok(text.includes(label),label);
+  for(const label of ['接入方式','Cookie + 独立浏览器（推荐）','旧 Cookie 接口（实验）','独立临时浏览器配置','不读取你日常 Chrome 的数据','不会在失败时静默互相回退','X 操作权限','接入状态：已实现'])assert.ok(text.includes(label),label);
   for(const label of ['允许收藏书签','允许公开回复','允许公开 @ 用户分享'])assert.equal(namedField(ui.render(),label).props.checked,false);
   ui.change('接入方式','direct_api');
   assert.ok(!flatten(ui.render()).includes('浏览器路径（可选）'));assert.match(flatten(ui.render()),/Python 路径/);
@@ -587,18 +594,21 @@ test('workspace migration is unavailable while the backend reports active work',
 
 function channelCard(tree,id){const cards=findAll(tree,node=>node.props['data-channel']===id);assert.equal(cards.length,1,'unique channel: '+id);return cards[0];}
 
-test('Bilibili is an anonymous read-only card with a separate X account group',()=>{
+test('Bilibili has an anonymous check and X settings live inside its single channel card',()=>{
   const ui=harness(),tree=ui.render(),bili=channelCard(tree,'bilibili'),text=flatten(bili);
   for(const label of ['B站','无需账号','无需 Cookie','读取评论','公共 BV 链接摘要','宿主搜索未就绪','尚未核验','当前会话可见性：尚未确认','未声明可执行写操作'])assert.ok(text.includes(label),label);
-  assert.ok(!text.includes('账号配置：已配置'));assert.equal(findAll(bili,node=>['input','select','textarea','button'].includes(node.type)).length,0);
+  assert.ok(!text.includes('账号配置：已配置'));assert.equal(findAll(bili,node=>['input','select','textarea'].includes(node.type)).length,0);
+  assert.equal(namedButton(bili,'检查连接与权限').props.disabled,false);
   const groups=findAll(tree,node=>node.props['data-channel-account']);assert.deepEqual(groups.map(node=>node.props['data-channel-account']),['x']);
   assert.equal(namedField(groups[0],'auth_token').props.type,'password');assert.equal(namedField(groups[0],'允许公开回复').props.checked,false);
+  assert.equal(findAll(channelCard(tree,'x'),node=>node.props['data-channel-account']==='x').length,1);assert.equal(groups[0].type,'div');
+  assert.equal(findAll(tree,node=>node.type==='summary'&&flatten(node)==='X 账号设置').length,0);
   assert.deepEqual(ui.requests,[]);
 });
 
 test('newly registered providers appear automatically without inheriting X account fields',async()=>{
   const ui=harness(),future={id:'synthetic-provider',name:'示例公共渠道',installed:true,implemented:true,available:true,configured:false,accountRequired:false,connection:{state:'unchecked',scope:'公开摘要'},currentSessionVisible:false,reads:['read'],actions:{bookmark:{supported:true,enabled:false,liveVerified:false}},scope:'仅示例公开数据'};
-  ui.server.channels.platforms.push(future);await ui.click('刷新渠道状态');
+  ui.server.channels.platforms.push(future);await ui.click('刷新渠道列表');
   const card=channelCard(ui.render(),future.id),text=flatten(card);
   assert.match(text,/示例公共渠道/);assert.match(text,/当前会话可见性：当前不可见/);assert.match(text,/收藏：已支持 · 开关关闭 · 真实操作未验证/);
   assert.equal(findAll(card,node=>['input','select','textarea'].includes(node.type)).length,0);
@@ -643,24 +653,25 @@ test('unsupported action metadata cannot appear as enabled or live verified',()=
 
 test('a failed channel refresh preserves cached cards, X credentials state and unsaved account drafts',async()=>{
   const options={failRoute:'channels',error:'渠道目录暂时离线'},ui=harness(options),cached=JSON.stringify(ui.getModel().channels);
-  ui.change('AI 账号用户名','synthetic_draft');ui.change('auth_token','synthetic-secret');await ui.click('刷新渠道状态');
+  ui.change('AI 账号用户名','synthetic_draft');ui.change('auth_token','synthetic-secret');await ui.click('刷新渠道列表');
   assert.equal(JSON.stringify(ui.getModel().channels),cached);assert.equal(namedField(ui.render(),'AI 账号用户名').props.value,'synthetic_draft');assert.equal(namedField(ui.render(),'auth_token').props.value,'synthetic-secret');
   assert.match(flatten(ui.render()),/渠道目录暂不可用：渠道目录暂时离线/);channelCard(ui.render(),'bilibili');
   assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['channels','GET']]);
-  options.failRoute=null;await ui.click('刷新渠道状态');assert.equal(ui.getModel().channelsError,'');assert.equal(ui.getModel().channelsLoading,false);
+  options.failRoute=null;await ui.click('刷新渠道列表');assert.equal(ui.getModel().channelsError,'');assert.equal(ui.getModel().channelsLoading,false);
 });
 
 test('initial channel failure leaves personal records and X account settings usable',async()=>{
   const ui=harness({loaded:false,failRoute:'channels',error:'旧版没有渠道目录接口'});await ui.mount();
   assert.match(flatten(ui.render()),/长期记忆/);assert.match(flatten(ui.render()),/渠道目录暂不可用/);assert.match(flatten(ui.render()),/未确认的渠道不会显示为已接入/);
   assert.equal(ui.getModel().channels,null);assert.equal(namedButton(ui.render(),'现在唤醒').props.disabled,false);assert.equal(namedField(ui.render(),'AI 账号用户名').props.disabled,false);
-  assert.equal(findAll(ui.render(),node=>node.props['data-channel']).length,0);assert.ok(ui.requests.every(row=>row.method==='GET'));
+  const fallback=channelCard(ui.render(),'x');assert.match(flatten(fallback.children[0]),/目录未确认/);assert.equal(namedButton(fallback,'检查连接与权限').props.disabled,true);
+  assert.ok(!flatten(fallback).includes('接入状态：已实现'));assert.ok(ui.requests.every(row=>row.method==='GET'));
 });
 
 test('a slow channel directory does not delay the personal view or its settings',async()=>{
   let finish;const gate=new Promise(resolve=>{finish=resolve;}),ui=harness({loaded:false,onChannelsGet:()=>gate});
   await ui.mount();assert.match(flatten(ui.render()),/长期记忆/);assert.equal(namedField(ui.render(),'角色名').props.disabled,false);assert.equal(namedButton(ui.render(),'现在唤醒').props.disabled,false);
-  assert.equal(ui.getModel().channels,null);assert.equal(ui.getModel().channelsLoading,true);assert.equal(namedButton(ui.render(),'刷新渠道状态').props.disabled,true);
+  assert.equal(ui.getModel().channels,null);assert.equal(ui.getModel().channelsLoading,true);assert.equal(namedButton(ui.render(),'刷新渠道列表').props.disabled,true);
   finish();await new Promise(resolve=>setImmediate(resolve));channelCard(ui.render(),'bilibili');assert.equal(ui.getModel().channelsLoading,false);ui.unmount();
 });
 
@@ -672,19 +683,96 @@ test('polling shares a pending channel read and ignores its result after unmount
 
 test('malformed channel responses retain the last valid directory instead of inventing support',async()=>{
   for(const malformed of [{}, {platforms:{}}, {platforms:[{id:'broken'}]}, {platforms:[{id:'same',name:'甲'},{id:'same',name:'乙'}]}]){
-    const ui=harness(),cached=JSON.stringify(ui.getModel().channels);ui.server.channels=malformed;await ui.click('刷新渠道状态');
+    const ui=harness(),cached=JSON.stringify(ui.getModel().channels);ui.server.channels=malformed;await ui.click('刷新渠道列表');
     assert.equal(JSON.stringify(ui.getModel().channels),cached);assert.match(flatten(ui.render()),/渠道目录返回格式无效/);assert.equal(ui.getModel().channelsLoading,false);
   }
 });
 
 test('empty channel catalogs and channel errors do not change account permissions or cause platform calls',async()=>{
-  const ui=harness(),before=JSON.stringify(ui.server.remote.config);ui.server.channels={ok:true,platforms:[]};await ui.click('刷新渠道状态');
-  assert.match(flatten(ui.render()),/当前没有已注册渠道/);assert.equal(JSON.stringify(ui.server.remote.config),before);assert.equal(namedField(ui.render(),'允许公开回复').props.checked,false);
+  const ui=harness(),before=JSON.stringify(ui.server.remote.config);ui.server.channels={ok:true,platforms:[]};await ui.click('刷新渠道列表');
+  assert.match(flatten(ui.render()),/当前没有已注册渠道/);assert.equal(JSON.stringify(ui.server.remote.config),before);assert.equal(ui.getModel().cfg.allowReplies,false);assert.equal(findAll(ui.render(),node=>node.props['data-channel']).length,0);
   assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['channels','GET']]);
 });
 
 test('channel error text hides credential assignments and refreshes no personal or platform routes',async()=>{
-  const ui=harness({failRoute:'channels',error:'cookie=synthetic-canary authorization=synthetic-other'});await ui.click('刷新渠道状态');
+  const ui=harness({failRoute:'channels',error:'cookie=synthetic-canary authorization=synthetic-other'});await ui.click('刷新渠道列表');
   const text=flatten(ui.render());assert.ok(!text.includes('synthetic-canary'));assert.ok(!text.includes('synthetic-other'));assert.match(text,/凭据已隐藏/);
   assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['channels','GET']]);
+});
+
+test('channel summaries stay compact and configuration precedes collapsed diagnostic metadata',()=>{
+  const tree=previewTree();
+  for(const id of ['x','bilibili']){
+    const card=channelCard(tree,id),summary=card.children[0],metadata=findAll(card,node=>node.props['data-channel-status']===id);
+    assert.equal(card.type,'details');assert.equal(card.props.open,undefined);assert.equal(summary.type,'summary');
+    assert.ok(flatten(summary).length<35);assert.ok(!flatten(summary).includes('接入状态'));
+    assert.equal(metadata.length,1);assert.equal(metadata[0].type,'details');assert.equal(metadata[0].props.open,undefined);assert.equal(flatten(metadata[0].children[0]),'详细状态');
+    assert.equal(findAll(metadata[0],node=>['input','select','textarea','button'].includes(node.type)).length,0);
+    const primary=card.children.filter(child=>child!==metadata[0]);
+    assert.ok(flatten(primary).includes('检查连接与权限'));assert.ok(!flatten(primary).includes('当前会话可见性'));
+  }
+  const x=channelCard(tree,'x');for(const label of ['AI 账号用户名','auth_token','ct0','接入方式','允许公开回复'])namedField(x,label);
+  for(const label of ['保存 X 设置','保存 AI Cookie','检查连接与权限'])namedButton(x,label);
+});
+
+test('X check refuses unsaved settings or even a partial Cookie and never diagnoses an old account',async()=>{
+  for(const edit of [ui=>ui.change('AI 账号用户名','synthetic_next'),ui=>ui.change('auth_token','synthetic-pending-cookie'),ui=>ui.change('允许公开回复',undefined,true)]){
+    const ui=harness();edit(ui);const before=JSON.stringify({cfg:ui.getModel().cfg,cookie:ui.getModel().cookie}),card=channelCard(ui.render(),'x'),button=namedButton(card,'检查连接与权限');
+    assert.equal(button.props.disabled,true);assert.match(flatten(card),/请先保存 X 设置和已填写的 Cookie/);
+    await button.props.onClick();assert.deepEqual(ui.requests,[]);assert.equal(JSON.stringify({cfg:ui.getModel().cfg,cookie:ui.getModel().cookie}),before);
+  }
+});
+
+test('X checks only the selected saved channel and reports identity separately from configured permissions',async()=>{
+  const ui=harness(),config=JSON.stringify(ui.getModel().cfg),policy=JSON.stringify(ui.getModel().policy),bili=JSON.stringify(ui.getModel().channels.platforms[1]);
+  ui.change('角色名','尚未保存的合成角色');await ui.checkChannel('x');
+  const text=flatten(channelCard(ui.render(),'x'));assert.match(text,/账号身份：已核验 · @synthetic_x/);assert.match(text,/未做写入实测/);assert.match(text,/不等于真实发帖验收/);
+  assert.equal(JSON.stringify(ui.getModel().cfg),config);assert.equal(JSON.stringify(ui.getModel().policy),policy);assert.equal(JSON.stringify(ui.getModel().channels.platforms[1]),bili);assert.equal(ui.getModel().profile.name,'尚未保存的合成角色');
+  assert.deepEqual(ui.requests.map(row=>[row.route,row.method,row.body]),[['channels/check','POST',{platform:'x'}]]);
+  assert.equal(ui.getModel().channelChecking,'');assert.equal(ui.getModel().channelChecks.x.checks.permissions.liveWritesChecked,false);
+});
+
+test('Bilibili check uses the shared route without inventing login or writable permissions',async()=>{
+  const ui=harness();await ui.checkChannel('bilibili');const card=channelCard(ui.render(),'bilibili'),text=flatten(card);
+  assert.match(text,/无需核验个人身份/);assert.match(text,/不核验个人账号或写权限/);assert.match(text,/本版仅匿名只读/);assert.ok(!text.includes('@synthetic_x'));assert.ok(!text.includes('真实操作已验证'));
+  assert.equal(findAll(card,node=>['input','select','textarea'].includes(node.type)).length,0);
+  assert.deepEqual(ui.requests.map(row=>[row.route,row.method,row.body]),[['channels/check','POST',{platform:'bilibili'}]]);
+});
+
+test('a failed channel check refreshes failure metadata while preserving every draft and local record',async()=>{
+  const base=previewData().channels.platforms,options={channels:{ok:true,platforms:[{...base[0],configured:true,connection:{state:'verified'}},base[1]]},failRoute:'channels/check',error:'cookie=synthetic-secret 检查失败'},ui=harness(options),before=JSON.stringify(ui.server.assistant);
+  ui.change('角色名','未保存的角色');ui.change('允许本地文件写入',undefined,true);
+  options.onChannelCheck=()=>{ui.server.channels.platforms[0].connection={state:'failed',scope:'仅账号身份接口'};ui.setModel({cfg:{...ui.getModel().cfg,aiUsername:'draft_during_check'},cookie:{auth_token:'synthetic-draft',ct0:''}});};
+  await ui.checkChannel('x');const text=flatten(channelCard(ui.render(),'x'));
+  assert.match(text,/连接核验：连接失败/);assert.match(text,/检查未完成：/);assert.ok(!text.includes('synthetic-secret'));
+  assert.equal(ui.getModel().profile.name,'未保存的角色');assert.equal(ui.getModel().policy.fileWrite,true);assert.equal(ui.getModel().cfg.aiUsername,'draft_during_check');assert.equal(ui.getModel().cookie.auth_token,'synthetic-draft');assert.equal(JSON.stringify(ui.server.assistant),before);
+  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['channels/check','POST'],['channels','GET']]);assert.equal(ui.getModel().channelChecking,'');
+});
+
+test('saving X settings or Cookie does not automatically check the platform and invalidates the old check result',async()=>{
+  const ui=harness();await ui.checkChannel('x');ui.change('AI 账号用户名','synthetic_saved');await ui.click('保存 X 设置');
+  assert.equal(ui.getModel().channelChecks.x,null);assert.equal(ui.requests.filter(row=>row.route==='channels/check').length,1);
+  ui.change('auth_token','synthetic-auth');ui.change('ct0','synthetic-ct0');assert.equal(namedButton(channelCard(ui.render(),'x'),'检查连接与权限').props.disabled,true);
+  await ui.click('保存 AI Cookie');assert.equal(ui.getModel().cookie.auth_token,'');assert.equal(ui.getModel().channelChecks.x,null);assert.equal(ui.requests.filter(row=>row.route==='channels/check').length,1);
+  await ui.checkChannel('x');assert.equal(ui.requests.filter(row=>row.route==='channels/check').length,2);assert.ok(!ui.requests.some(row=>['diagnose','assistant/wake','run'].includes(row.route)));
+});
+
+test('an active check freezes account changes until its own result arrives',async()=>{
+  let finish;const gate=new Promise(resolve=>{finish=resolve;}),ui=harness({onChannelCheck:()=>gate}),pending=ui.checkChannel('x');
+  assert.equal(ui.getModel().channelChecking,'x');assert.equal(namedField(ui.render(),'AI 账号用户名').props.disabled,true);assert.equal(namedButton(channelCard(ui.render(),'bilibili'),'检查连接与权限').props.disabled,true);
+  const pendingButton=namedButton(channelCard(ui.render(),'x'),'检查中…');assert.equal(pendingButton.props.disabled,true);await pendingButton.props.onClick();assert.equal(ui.requests.filter(row=>row.route==='channels/check').length,1);
+  finish();await pending;assert.equal(ui.getModel().channelChecking,'');assert.equal(namedField(ui.render(),'AI 账号用户名').props.disabled,false);
+});
+
+test('future channels share one collapsed entry and cannot run an undeclared diagnostic',async()=>{
+  const future={id:'future-checkless',name:'未来公共渠道',implemented:true,available:true,accountRequired:false,reads:['read']},ui=harness({channels:{ok:true,platforms:[future]}}),card=channelCard(ui.render(),future.id),button=namedButton(card,'检查连接与权限');
+  assert.equal(card.type,'details');assert.equal(card.props.open,undefined);assert.equal(button.props.disabled,true);assert.match(flatten(card),/尚未提供连接检查/);
+  assert.equal(findAll(ui.render(),node=>node.props['data-channel-account']).length,0);await button.props.onClick();assert.deepEqual(ui.requests,[]);
+});
+
+test('failure to refresh after a failed check labels the old verified result as cached',async()=>{
+  const base=previewData().channels.platforms,options={channels:{ok:true,platforms:[{...base[0],configured:true,connection:{state:'verified'}},base[1]]},failRoute:'channels/check',error:'合成检查失败'},ui=harness(options);
+  options.onChannelsGet=()=>{throw Error('合成目录离线');};await ui.checkChannel('x');
+  const card=channelCard(ui.render(),'x'),text=flatten(card);assert.match(flatten(card.children[0]),/检查未完成/);assert.match(text,/账号身份：本次未能核验/);assert.match(text,/本次检查未完成，上次状态待刷新/);assert.match(text,/上次目录连接状态：最近连接核验通过/);
+  assert.ok(!text.includes('连接核验：最近连接核验通过'));assert.equal(ui.getModel().channels.platforms[0].connection.state,'verified');assert.equal(ui.getModel().channelChecking,'');
 });

@@ -15,6 +15,12 @@ B 站搜索借当前会话可见的宿主 web_search，限定并过滤规范视�
 
 从0.5.1起，每个渠道默认收起，摘要只展示名称和简短状态，点击可展开完整信息；未来动态注册的渠道同样默认收起。用户已展开的渠道不会因为定时刷新或编辑其他设置而被强制收起。
 
+从0.5.2起，X账号、Cookie、接入方式、动作开关、保存和检查直接放在X同一展开区，不再另设“X账号设置”。详细接入组件、会话可见性、核验范围等元数据放入次级“详细状态”，默认收起。B站同一入口标明无需账号和仅支持公共读取，不能显示未实现的登录配置。
+
+“刷新渠道列表”只刷新已知元数据，不访问平台；每个支持诊断的渠道可显式点击“检查连接与权限”，调用可信设置接口POST channels/check，参数只有platform。X通过原只读身份核验检查配置账号是否匹配，不修改原动作开关、限流暂停或不确定回执。B站仅尝试一次固定公开视频元信息请求，无Cookie，不代表评论/搜索或账号写权限已验证。
+
+检查结果checks分别给出connection、identity和permissions；permissions固定标configuration-only、liveWritesChecked:false。检查成功不能被写成所有平台权限通过；未保存的X配置或Cookie应先保存，检查中禁用重复操作，失败更新已知状态且保留草稿。
+
 ## 统一工具
 
 - social_status：当前渠道目录和能力，不发起平台连接请求。
@@ -30,7 +36,7 @@ B 站搜索借当前会话可见的宿主 web_search，限定并过滤规范视�
 
 适配器提供 id、name、同步 capabilities(exec?)，以及其明确支持的方法：search/read/timeline/comments/action。方法收到已剔除 platform 的参数、AbortSignal 和原始工具执行上下文。每个适配器自行负责账号、网络限制、内容读取边界和动作回执。
 
-capabilities 公开字段包括 implemented/installed/available/configured、accountRequired、connection、reads、readAvailability 和 actions。没有执行上下文时 currentSessionVisible 应为 null；不得把全局工具注册当成当前会话可见。能力目录不得包含凭据、私密配置或角色资料。
+capabilities 公开字段包括 implemented/installed/available/configured、accountRequired、connection、reads、readAvailability、actions，以及diagnostics:{supported,kind,scope}。没有执行上下文时 currentSessionVisible 应为 null；不得把全局工具注册当成当前会话可见。能力目录不得包含凭据、私密配置或角色资料。可选check(signal,exec)必须只读，由设置页显式触发，不注册模型自动检查工具。
 
 统一结果保留原始适配器的 data/source 等公开结果，追加 platform/scope/items。items 用于跨渠道展示来源和读取范围，不应将其当作完整原始内容或已核验事实。
 
