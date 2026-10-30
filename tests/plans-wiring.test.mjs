@@ -33,6 +33,16 @@ function fixture(t, { available = true, registryAvailable = true } = {}) {
         assert.ok(task);
         if (action.kind === 'set-schedule') Object.assign(task.schedule, action.patch);
         else if (action.kind === 'archive') task.archivedAt = Date.now();
+        else if (action.kind === 'update') {
+          assert.deepEqual(Object.keys(action).sort(), ['kind', 'patch', 'taskId']);
+          assert.ok(Object.keys(action.patch).length > 0);
+          assert.ok(Object.keys(action.patch).every(key => ['title', 'prompt'].includes(key)), 'content updates cannot patch permissions, integrations or schedules');
+          if (task.archivedAt !== undefined || task.executions.length > 0) throw Error('task content is frozen after its first execution');
+          for (const [key, value] of Object.entries(action.patch)) task[key] = value.trim();
+          // Mirror the native content transition so an unsafe update of a
+          // continuation snapshot cannot be hidden by a more permissive mock.
+          task.freeze = undefined; task.handover = undefined;
+        } else assert.fail('unsupported host action: ' + action.kind);
       }
       requestCache.set(requestId, fingerprint);
       return host.snapshot();
@@ -196,4 +206,136 @@ test('API update accepts UI taskId alias and never edits the host-frozen task in
   assert.equal(changed.body.plan.schedule.cron, '0 9 * * *');
   assert.equal(f.hostCalls.at(-1).action.kind, 'set-schedule');
   assert.equal(f.taskRows[0].integrations['dsh-my-fish'].instruction, draft('ignored').instruction);
+});
+
+test('plan tool declares management ID aliases and explains update fields', async t => {
+  const f = fixture(t), definition = f.tools.get('assistant_plan'), properties = definition.parameters.properties;
+  for (const key of ['id', 'taskId', 'planId', 'requestId', 'title', 'instruction', 'schedule']) assert.ok(properties[key], key + ' is supported by the declared tool schema');
+  assert.match(definition.description, /update|修改/);
+  assert.match(properties.requestId.description ?? definition.description, /requestId|请求/);
+  assert.match([properties.instruction.description, definition.description].join(' '), /指令|正文|内容/);
+});
+
+test('main tool updates current content through native update while preserving creation identity and schedule', async t => {
+  const f = fixture(t), original = draft('content-tool-create'), created = await f.run('assistant_plan', original), id = created.plan.id;
+  const marker = structuredClone(f.taskRows[0].integrations), initialSchedule = structuredClone(f.taskRows[0].schedule);
+  for (const [index, alias] of ['id', 'taskId', 'planId'].entries()) {
+    const instruction = 'Synthetic public reading instruction ' + index;
+    const changed = await f.run('assistant_plan', { action: 'update', [alias]: id, requestId: 'content-tool-update-' + index, instruction });
+    assert.equal(changed.ok, true); assert.equal(changed.plan.instruction, instruction);
+    assert.equal(changed.plan.canEditContent, true);
+    assert.equal(changed.plan.contentEditReason, null);
+    const call = f.hostCalls.at(-1);
+    assert.equal(call.action.kind, 'update'); assert.equal(call.initiator, 'main-session');
+    assert.deepEqual(Object.keys(call.action.patch), ['prompt']);
+    assert.match(call.action.patch.prompt, /assistant_plan_report/);
+    assert.match(call.action.patch.prompt, /独立只读计划执行/);
+    assert.ok(call.action.patch.prompt.includes(instruction));
+    assert.deepEqual(f.taskRows[0].schedule, initialSchedule);
+    assert.deepEqual(f.taskRows[0].integrations, marker);
+    assert.equal(f.taskRows[0].permission, 'read-only');
+    assert.equal(f.taskRows[0].reuseSession, false); assert.equal(f.taskRows[0].goalRun, false);
+    const listed = await f.run('assistant_plan', { action: 'list' });
+    assert.equal(listed.plans[0].instruction, instruction);
+    assert.deepEqual(listed, JSON.parse(JSON.stringify(listed)), 'current content receipts are already lossless JSON');
+  }
+  const renamed = await f.run('assistant_plan', { action: 'update', id, requestId: 'content-tool-title', title: 'Synthetic renamed plan' });
+  assert.equal(renamed.plan.title, 'Synthetic renamed plan');
+  assert.deepEqual(Object.keys(f.hostCalls.at(-1).action.patch), ['title']);
+  const calls = f.hostCalls.length, replay = await f.run('assistant_plan', original);
+  assert.equal(replay.replayed, true); assert.equal(replay.plan.title, renamed.plan.title);
+  assert.equal(replay.plan.instruction, 'Synthetic public reading instruction 2');
+  assert.equal(f.hostCalls.length, calls); assert.equal(f.taskRows.length, 1);
+});
+
+test('both trusted API aliases update plan content and reject untrusted requests before host mutations', async t => {
+  const f = fixture(t);
+  for (const [index, prefix] of ['/my-fish/api', '/x-whale/api'].entries()) {
+    const created = await f.http(prefix, 'POST', 'plans', draft('content-api-create-' + index)), id = created.body.plan.id;
+    const instruction = 'Synthetic API content ' + index, title = 'Synthetic API title ' + index;
+    const body = { action: 'update', taskId: id, requestId: 'content-api-update-' + index, title, instruction };
+    const calls = f.hostCalls.length;
+    const denied = await f.http(prefix, 'POST', 'plans', body, { origin: 'https://untrusted.example' });
+    assert.equal(denied.status, 403); assert.equal(f.hostCalls.length, calls);
+    const changed = await f.http(prefix, 'POST', 'plans', body);
+    assert.equal(changed.status, 200); assert.equal(changed.body.plan.instruction, instruction); assert.equal(changed.body.plan.title, title);
+    assert.deepEqual(Object.keys(f.hostCalls.at(-1).action.patch).sort(), ['prompt', 'title']);
+    const listed = await f.http(prefix, 'GET', 'plans');
+    assert.equal(listed.body.plans.find(row => row.id === id).instruction, instruction);
+    const unchanged = await f.http(prefix, 'POST', 'plans', body);
+    assert.equal(unchanged.status, 200); assert.equal(unchanged.body.unchanged, true);
+    assert.equal(f.hostCalls.length, calls + 1);
+  }
+});
+
+test('mixed actual content and time changes reject atomically while unchanged echoes need only one native action', async t => {
+  const f = fixture(t), original = draft('mixed-content-create'), created = await f.run('assistant_plan', original), id = created.plan.id;
+  const before = structuredClone(f.taskRows), calls = f.hostCalls.length;
+  const mixed = { action: 'update', id, requestId: 'mixed-content-update', title: 'Changed title', instruction: 'Changed public reading', schedule: { ...original.schedule, cron: '15 9 * * *' } };
+  await assert.rejects(f.run('assistant_plan', mixed), /分开|分别|同时|两次/);
+  assert.equal(f.hostCalls.length, calls); assert.deepEqual(f.taskRows, before);
+  const contentOnly = await f.run('assistant_plan', { ...mixed, requestId: 'mixed-content-echo-clock', schedule: original.schedule });
+  assert.equal(contentOnly.plan.instruction, mixed.instruction); assert.equal(f.hostCalls.at(-1).action.kind, 'update');
+  const timeOnly = await f.run('assistant_plan', { ...mixed, requestId: 'mixed-content-echo-content' });
+  assert.equal(timeOnly.plan.schedule.cron, mixed.schedule.cron); assert.equal(timeOnly.plan.instruction, mixed.instruction);
+  assert.equal(f.hostCalls.at(-1).action.kind, 'set-schedule');
+});
+
+test('frozen content rejects changes but accepts identical saved content without resubmission', async t => {
+  const f = fixture(t), created = await f.run('assistant_plan', draft('frozen-content-create')), id = created.plan.id;
+  const body = { action: 'update', id, requestId: 'frozen-content-saved', instruction: 'Synthetic saved instruction before execution' };
+  const changed = await f.run('assistant_plan', body);
+  f.taskRows[0].executions.push({ id: 'content-frozen-execution', sessionId: 'worker-session', startedAt: 10, endedAt: 20, result: 'succeeded' });
+  const before = structuredClone(f.taskRows), calls = f.hostCalls.length;
+  await assert.rejects(f.run('assistant_plan', { ...body, requestId: 'frozen-content-changed', instruction: 'Different instruction after execution' }), /冻结|执行|只读|不能修改/);
+  const same = await f.run('assistant_plan', body);
+  assert.equal(same.unchanged, true); assert.equal(same.plan.instruction, changed.plan.instruction);
+  assert.equal(same.plan.canEditContent, false);
+  assert.equal(typeof same.plan.contentEditReason, 'string'); assert.ok(same.plan.contentEditReason.length > 0);
+  assert.equal(f.hostCalls.length, calls); assert.deepEqual(f.taskRows, before);
+  await assert.rejects(f.run('assistant_plan', { ...body, instruction: 'Ordinary session attempt' }, f.ordinary), /专用个人助理会话/);
+  f.taskRows[0].executions.push({ id: 'content-running-execution', sessionId: 'worker-session', startedAt: 21 });
+  await assert.rejects(f.run('assistant_plan', { ...body, instruction: 'Worker attempt' }, f.worker), /计划会话/);
+  const listed = await f.run('assistant_plan', { action: 'list' });
+  assert.equal(listed.plans[0].canEditContent, false);
+});
+
+test('management validates stable requests, conflicting aliases and action-specific fields without host writes', async t => {
+  const f = fixture(t), created = await f.run('assistant_plan', draft('content-validation-create')), id = created.plan.id;
+  const before = structuredClone(f.taskRows), calls = f.hostCalls.length;
+  for (const body of [
+    { action: 'update', id, instruction: 'Missing stable request' },
+    { action: 'update', id, taskId: 'conflicting-plan', requestId: 'content-conflict', instruction: 'Wrong target' },
+    { action: 'update', id, planId: 'conflicting-plan', requestId: 'content-conflict-plan', instruction: 'Wrong target' },
+    { action: 'pause', id, requestId: 'content-pause-field', instruction: 'Cannot sneak an edit into pause' },
+    { action: 'update', id, requestId: 'content-empty-change' },
+  ]) await assert.rejects(f.run('assistant_plan', body));
+  assert.equal(f.hostCalls.length, calls); assert.deepEqual(f.taskRows, before);
+  const valid = await f.run('assistant_plan', { action: 'update', id, taskId: id, planId: id, requestId: 'content-aliases-same', instruction: 'All aliases identify the same plan' });
+  assert.equal(valid.ok, true); assert.equal(valid.plan.id, id);
+});
+
+test('content updates protect continuation snapshots and handover data from the native clearing transition', async t => {
+  const f = fixture(t), created = await f.run('assistant_plan', draft('content-continuation-create')), id = created.plan.id;
+  for (const key of ['freeze', 'handover']) {
+    const task = f.taskRows[0]; task[key] = { synthetic: 'must be preserved' };
+    const before = structuredClone(task), calls = f.hostCalls.length;
+    await assert.rejects(f.run('assistant_plan', { action: 'update', id, requestId: 'content-protect-' + key, instruction: 'Changed content must not clear ' + key }));
+    assert.deepEqual(task, before); assert.equal(f.hostCalls.length, calls);
+    const listed = await f.run('assistant_plan', { action: 'list' });
+    assert.equal(listed.plans[0].canEditContent, false);
+    assert.equal(typeof listed.plans[0].contentEditReason, 'string'); assert.ok(listed.plans[0].contentEditReason.length > 0);
+    delete task[key];
+  }
+});
+
+test('unrecognized host prompt is not presented as the old integration instruction or silently replaced', async t => {
+  const f = fixture(t), original = draft('content-unrecognized-create'), created = await f.run('assistant_plan', original), id = created.plan.id;
+  f.taskRows[0].prompt = 'Synthetic externally replaced prompt without the guarded My Fish wrapper';
+  const listed = await f.run('assistant_plan', { action: 'list' });
+  assert.equal(listed.plans[0].instruction, null); assert.equal(listed.plans[0].canEditContent, false);
+  assert.equal(typeof listed.plans[0].contentEditReason, 'string'); assert.ok(listed.plans[0].contentEditReason.length > 0);
+  const before = structuredClone(f.taskRows), calls = f.hostCalls.length;
+  await assert.rejects(f.run('assistant_plan', { action: 'update', id, requestId: 'content-unrecognized-update', instruction: original.instruction }));
+  assert.deepEqual(f.taskRows, before); assert.equal(f.hostCalls.length, calls);
 });

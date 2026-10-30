@@ -28,6 +28,11 @@ function fixture() {
         const task = tasks.find(row => row.id === action.taskId);
         assert.ok(task);
         if (action.kind === 'archive') { task.archivedAt = NOW; task.schedule.enabled = false; }
+        else if (action.kind === 'update') {
+          if (task.archivedAt !== undefined || task.executions.length) throw Error('content-frozen');
+          assert.ok(Object.keys(action.patch).every(key => ['title', 'prompt'].includes(key)));
+          Object.assign(task, structuredClone(action.patch));
+        }
         else {
           if (action.patch.mode === 'once' && action.patch.enabled && action.patch.at <= NOW) throw Error('invalid schedule');
           task.schedule = { ...task.schedule, ...structuredClone(action.patch), nextRunAt: action.patch.enabled === false ? undefined : NOW + 3600000 };
@@ -196,6 +201,105 @@ test('editing paused schedule preserves disabled state and run cap unless explic
   assert.equal(once.plan.schedule.maxRuns, undefined);
   assert.equal(Object.hasOwn(f.calls.at(-1).action.patch, 'maxRuns'), false);
   assert.equal(f.rows()[0].permission, 'read-only');
+});
+
+test('instruction and title updates before execution use native content patches and list authoritative content', async () => {
+  const f = fixture(), original = input('content-source'), { plan } = await f.plans.create(original, 'main');
+  const before = structuredClone(f.rows()[0]), instruction = 'Synthetic public source instruction. '.repeat(25).slice(0, 875);
+  const changed = await f.plans.manage({ action: 'update', id: plan.id, requestId: 'content-new-instruction', instruction }, 'main');
+  assert.equal(changed.plan.instruction, instruction.trim());
+  assert.equal(changed.plan.canEditContent, true);
+  assert.equal(changed.plan.contentEditReason, null);
+  assert.equal(f.calls.at(-1).action.kind, 'update');
+  assert.deepEqual(Object.keys(f.calls.at(-1).action.patch), ['prompt']);
+  assert.match(f.rows()[0].prompt, /独立只读计划执行/);
+  assert.ok(f.rows()[0].prompt.includes(instruction.trim()));
+  assert.deepEqual(f.rows()[0].schedule, before.schedule);
+  assert.deepEqual(f.rows()[0].integrations, before.integrations, 'original create identity remains immutable');
+  for (const key of ['permission', 'reuseSession', 'goalRun', 'applyCardDefaults']) assert.deepEqual(f.rows()[0][key], before[key]);
+  assert.equal(f.plans.list().plans[0].instruction, instruction.trim());
+  const replay = await f.plans.create(original, 'main');
+  assert.equal(replay.replayed, true);
+  assert.equal(replay.plan.instruction, instruction.trim(), 'original create retry must not restore old instructions');
+  const titled = await f.plans.manage({ action: 'update', taskId: plan.id, requestId: 'content-new-title', title: 'Synthetic revised title' });
+  assert.equal(titled.plan.title, 'Synthetic revised title');
+  assert.equal(titled.plan.instruction, instruction.trim());
+  assert.deepEqual(f.calls.at(-1).action.patch, { title: 'Synthetic revised title' });
+  assert.deepEqual(titled, JSON.parse(JSON.stringify(titled)));
+  assert.equal(f.rows().length, 1);
+  assert.equal(f.calls.length, 3);
+});
+
+test('mixed actual time and content changes are refused before either write while unchanged echoes work', async () => {
+  const f = fixture(), { plan } = await f.plans.create(input());
+  const before = structuredClone(f.rows()[0]), changedSchedule = { ...schedule, cron: '30 9 * * *' };
+  await assert.rejects(f.plans.manage({ action: 'update', id: plan.id, requestId: 'mixed-edit', instruction: 'Synthetic changed requirement', schedule: changedSchedule }), /分两次/);
+  assert.deepEqual(f.rows()[0], before); assert.equal(f.calls.length, 1);
+  const echoed = await f.plans.manage({ action: 'update', id: plan.id, requestId: 'content-with-time-echo', instruction: 'Synthetic changed requirement', schedule: { ...schedule } });
+  assert.equal(echoed.plan.instruction, 'Synthetic changed requirement');
+  assert.equal(f.calls.at(-1).action.kind, 'update');
+  assert.deepEqual(f.rows()[0].schedule, before.schedule);
+  const time = await f.plans.manage({ action: 'update', planId: plan.id, requestId: 'time-with-content-echo', title: plan.title, instruction: echoed.plan.instruction, schedule: changedSchedule });
+  assert.equal(time.plan.schedule.cron, changedSchedule.cron);
+  assert.equal(f.calls.at(-1).action.kind, 'set-schedule');
+});
+
+test('any execution freezes changed content but not time updates or already-equal content retries', async () => {
+  for (const record of [{ id: 'running', startedAt: NOW }, { id: 'finished', startedAt: NOW, endedAt: NOW + 1, result: 'success' }, { id: 'cancelled', startedAt: NOW, endedAt: NOW + 1, result: 'cancelled' }]) {
+    const f = fixture(), { plan } = await f.plans.create(input());
+    f.rows()[0].executions.push(record);
+    assert.equal(f.plans.list().plans[0].canEditContent, false);
+    await assert.rejects(f.plans.manage({ action: 'update', id: plan.id, requestId: 'frozen-content', instruction: 'Synthetic changed requirement' }), /首次执行|已经执行|执行记录/);
+    assert.equal(f.calls.length, 1);
+    const same = await f.plans.manage({ action: 'update', id: plan.id, requestId: 'same-content', instruction: input().instruction });
+    assert.equal(same.unchanged, true); assert.equal(f.calls.length, 1);
+    const time = await f.plans.manage({ action: 'update', id: plan.id, requestId: 'time-still-editable', schedule: { ...schedule, cron: '30 9 * * *' } });
+    assert.equal(time.plan.schedule.cron, '30 9 * * *');
+  }
+});
+
+test('lost content update response is reconciled without another write even if a run starts', async () => {
+  const f = fixture(), { plan } = await f.plans.create(input());
+  const edit = { action: 'update', id: plan.id, requestId: 'unknown-content-update', instruction: 'Synthetic revised requirement' };
+  f.failNext(); await assert.rejects(f.plans.manage(edit), /connection lost/);
+  f.rows()[0].executions.push({ id: 'started-after-commit', sessionId: 'worker', startedAt: NOW });
+  const fresh = new Plans({ getHost: () => f.host, store: f.store, now: () => NOW });
+  const retry = await fresh.manage(edit);
+  assert.equal(retry.unchanged, true); assert.equal(retry.plan.instruction, edit.instruction);
+  assert.equal(f.calls.length, 2); assert.equal(f.rows().length, 1);
+});
+
+test('content updates protect native continuation data and unrecognized prompt wrappers', async () => {
+  for (const field of ['freeze', 'handover']) {
+    const f = fixture(), { plan } = await f.plans.create(input());
+    f.rows()[0][field] = { synthetic: 'native continuation data' };
+    const before = structuredClone(f.rows()[0]);
+    assert.equal(f.plans.list().plans[0].canEditContent, false);
+    await assert.rejects(f.plans.manage({ action: 'update', id: plan.id, requestId: 'protect-' + field, title: 'Synthetic new title' }), /续接|快照|交接|看板/);
+    assert.deepEqual(f.rows()[0], before); assert.equal(f.calls.length, 1);
+  }
+  const f = fixture(), { plan } = await f.plans.create(input());
+  f.rows()[0].prompt = 'Synthetic prompt edited outside the bridge';
+  const view = f.plans.list().plans[0];
+  assert.equal(view.instruction, null, 'never present the original marker as current instructions');
+  assert.equal(view.canEditContent, false);
+  await assert.rejects(f.plans.manage({ action: 'update', id: plan.id, requestId: 'unsafe-wrapper', instruction: 'Synthetic new instruction' }), /模板|提示|看板/);
+  await f.plans.manage({ action: 'update', id: plan.id, requestId: 'safe-time', schedule: { ...schedule, cron: '30 9 * * *' } });
+  assert.equal(f.rows()[0].prompt, 'Synthetic prompt edited outside the bridge');
+});
+
+test('update parameters give actionable errors and reject conflicting aliases or content on other actions', async () => {
+  const f = fixture(), { plan } = await f.plans.create(input());
+  for (const [value, message] of [
+    [{ action: 'update', id: plan.id, instruction: 'Synthetic instruction' }, /requestId/],
+    [{ action: 'update', id: plan.id, requestId: 'empty-edit' }, /instruction|title|schedule/],
+    [{ action: 'update', id: plan.id, taskId: 'another-id', requestId: 'conflict', instruction: 'Synthetic instruction' }, /冲突|一致/],
+    [{ action: 'pause', id: plan.id, requestId: 'wrong-action', instruction: 'Synthetic instruction' }, /update/],
+    [{ action: 'update', id: plan.id, requestId: 'secret-edit', instruction: 'api_key=synthetic-secret' }, /凭据/],
+  ]) await assert.rejects(f.plans.manage(value), message);
+  assert.equal(f.calls.length, 1);
+  const sameAliases = await f.plans.manage({ action: 'update', id: plan.id, taskId: plan.id, planId: plan.id, requestId: 'consistent-aliases', title: 'Synthetic new title' });
+  assert.equal(sameAliases.plan.title, 'Synthetic new title');
 });
 
 test('reports derive the open execution from actual calling session and reject spoofed identifiers', async () => {

@@ -1,6 +1,6 @@
 # My Fish 项目规则
 
-先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.6.2 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
+先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.6.3 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
 
 - 产品 My Fish，包/Cordis/前端模块 dsh-my-fish，主 API /my-fish/api。旧 X 工具和旧路由只作升级兼容。
 - 渠道通过适配器注册，不在统一工具里硬编码新增平台。公开能力字段白名单，不导出凭据；缺失、未实现、未启用或当前不可调用的操作明确拒绝。
@@ -16,6 +16,7 @@
 - 优先复用已核实宿主接口，不猜签名、工具或 UI 槽。官方听写不是连续通话，命令执行不是完整桌面控制。
 - 计划用 taskBoard 公开服务，不直接读写真实账本或再造 cron。独立计划只读执行，报告核对真实运行会话，不删除主会话社交写入检查。
 - 计划回执只投影公开字段，省略宿主内存中的undefined可选值；SDK在render前检查无损JSON，不能依赖JSON.stringify补救。snapshotJsonValue非法时返回undefined，验证必须断言返回值；读取或核对回执不重新创建计划。
+- 计划update支持首次执行前的title/instruction或单独完整schedule；任意执行记录后正文冻结，同内容重试不重写。内容和时间同时实际改变须写入前拒绝、分两次提交；宿主无原子混合动作。创建marker/fingerprint保持原始审计，当前正文从严格匹配的真实只读prompt投影。保护宿主freeze/handover，不自动取消重建，多个ID别名冲突拒绝。
 - 角色、网页、记忆和计划不能改变权限。tools.guard 作用于个人与核实活跃归属的子孙；isOwnedBy 核对所有权，不信任自称 parentId。
 - run_code 可以直接调用 Node，属于机器执行权限。内层工具守卫不能冒充整个程序的沙箱。默认原生工具模式。
 - 行为变更运行相关测试及 npm run check；安装版隔离验证用 verify-installed，不等于 GUI/模型或长期验收。

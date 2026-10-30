@@ -17,7 +17,8 @@ const effects = [], definitions = new Map(), taskRows = [], requests = new Map()
 const mainId = 'synthetic-plan-main', workerId = 'synthetic-plan-worker';
 const now = Date.now(), nextRunAt = now + 3600000;
 const originalFetch = globalThis.fetch;
-let hostCalls = 0, createCalls = 0, modelCalls = 0, networkCalls = 0;
+let hostCalls = 0, createCalls = 0, modelCalls = 0, networkCalls = 0, failAfterNextCommit = false;
+const hostActions = [], refused = [];
 let transitions, installedTaskBoard = null;
 process.env.DSH_HOME = isolatedHome;
 globalThis.fetch = () => { networkCalls++; throw Error('No network requests allowed'); };
@@ -34,6 +35,7 @@ const host = {
       return host.snapshot();
     }
     hostCalls++;
+    hostActions.push(structuredClone(action));
     if (action.kind === 'create') {
       createCalls++;
       if (transitions) {
@@ -44,7 +46,18 @@ const host = {
     } else {
       const task = taskRows.find(row => row.id === action.taskId);
       assert.ok(task);
-      if (transitions) {
+      if (action.kind === 'update') {
+        // applyUpdateTask is deliberately only a pure transition. The real
+        // HostTaskLedger applies these gates BEFORE invoking that function.
+        if (task.archivedAt !== undefined) throw Error('archived task is read-only');
+        const hasContent = transitions ? transitions.hasContentPatch(action.patch) : ['title', 'description', 'prompt'].some(key => key in action.patch);
+        const editable = transitions ? transitions.canEditTaskContent(task) : task.executions.length === 0;
+        if (hasContent && !editable) throw Error('task has already been executed');
+        if ('title' in action.patch && action.patch.title?.trim() === '') throw Error('title is required');
+        assert.ok(Object.keys(action.patch).every(key => ['title', 'prompt'].includes(key)), 'My Fish never changes permission, targets, schedule, or integrations through content updates');
+        if (transitions) taskRows.splice(0, taskRows.length, ...transitions.applyUpdateTask(taskRows, action.taskId, action.patch, now));
+        else Object.assign(task, action.patch, { updatedAt: now });
+      } else if (transitions) {
         const changed = action.kind === 'archive' ? transitions.applyArchiveTask(taskRows, action.taskId, now) : transitions.applySetSchedule(taskRows, action.taskId, action.patch, now, 'Asia/Shanghai');
         assert.equal(action.kind === 'archive' ? changed.archived : changed.applied, true);
         taskRows.splice(0, taskRows.length, ...changed.tasks);
@@ -59,6 +72,7 @@ const host = {
       }
     }
     requests.set(requestId, fingerprint);
+    if (failAfterNextCommit) { failAfterNextCommit = false; throw Error('synthetic receipt lost after commit'); }
     return host.snapshot();
   },
 };
@@ -78,7 +92,7 @@ try {
       }
     };
     transform(source);
-    transitions = Object.assign({}, ...await Promise.all(['task-create.ts', 'task-schedule.ts', 'task-archive.ts'].map(name => import(pathToFileURL(path.join(source, 'core', 'use-cases', name)).href))));
+    transitions = Object.assign({}, ...await Promise.all(['task-create.ts', 'task-schedule.ts', 'task-archive.ts', 'task-update.ts'].map(name => import(pathToFileURL(path.join(source, 'core', 'use-cases', name)).href))));
     installedTaskBoard = JSON.parse(fs.readFileSync(path.join(installedSource, '..', 'package.json'), 'utf8')).version;
   }
   const store = new Store();
@@ -104,6 +118,13 @@ try {
     checked.push(label);
     return value;
   }
+  async function rejectWithoutWrite(label, args, expected) {
+    const before = host.snapshot(), count = hostCalls;
+    await assert.rejects(execute(label, args), expected);
+    assert.equal(hostCalls, count, label + ' must reject before host.apply');
+    assert.deepEqual(host.snapshot(), before, label + ' must leave schedule, content, and history unchanged');
+    refused.push(label);
+  }
   const draft = { action: 'create', requestId: 'synthetic-plan-json-create', title: 'Synthetic public reading', instruction: 'Read a synthetic public source and report real changes only.', schedule: { mode: 'cron', cron: '0 * * * *', timeZone: 'Asia/Shanghai' } };
   const created = await execute('create', draft), id = created.plan.id;
   assert.equal(snapshotJsonValue(host.snapshot()), undefined, 'fixture retains real optional undefined values');
@@ -113,11 +134,66 @@ try {
   await execute('list-existing', { action: 'list' });
   assert.equal((await execute('create-replay', draft)).replayed, true);
   assert.equal(createCalls, 1, 'same request must not create twice');
+  assert.equal(created.plan.canEditContent, true);
+  const originalMarker = structuredClone(taskRows[0].integrations), originalSchedule = structuredClone(taskRows[0].schedule);
+  const revisedInstruction = 'Synthetic public reading. '.repeat(40).slice(0, 874) + 'S';
+  assert.equal(revisedInstruction.length, 875, '875 characters are purely synthetic, never copied from a real plan');
+  const contentArgs = { action: 'update', id, requestId: 'synthetic-plan-content', title: 'Synthetic revised reading', instruction: revisedInstruction };
+  const edited = await execute('update-content-before-first-run', contentArgs);
+  assert.equal(edited.plan.instruction, revisedInstruction);
+  assert.equal(edited.plan.title, contentArgs.title);
+  assert.equal(edited.plan.canEditContent, true);
+  assert.deepEqual(taskRows[0].schedule, originalSchedule);
+  assert.deepEqual(taskRows[0].integrations, originalMarker, 'creation fingerprint and original instruction remain immutable audit data');
+  assert.equal(taskRows[0].permission, 'read-only');
+  assert.deepEqual(Object.keys(hostActions.at(-1).patch).sort(), ['prompt', 'title']);
+  assert.equal(hostActions.at(-1).kind, 'update');
+  const listedEdited = await execute('list-edited-current-content', { action: 'list' });
+  assert.equal(listedEdited.plans[0].instruction, revisedInstruction);
+  const replayAfterEdit = await execute('original-create-replay-after-content-update', draft);
+  assert.equal(replayAfterEdit.replayed, true);
+  assert.equal(replayAfterEdit.plan.instruction, revisedInstruction, 'create replay reports current content without undoing updates');
+  const beforeSame = hostCalls;
+  assert.equal((await execute('content-update-equal-retry', contentArgs)).unchanged, true);
+  assert.equal(hostCalls, beforeSame);
+  await execute('update-title-taskId-alias', { action: 'update', taskId: id, requestId: 'synthetic-title-alias', title: 'Synthetic title through taskId' });
+  assert.deepEqual(Object.keys(hostActions.at(-1).patch), ['title']);
+  const instructionArgs = { action: 'update', planId: id, requestId: 'synthetic-instruction-alias', instruction: 'Synthetic instruction through planId.' };
+  const instructionOnly = await execute('update-instruction-planId-alias', instructionArgs);
+  assert.equal(instructionOnly.plan.instruction, instructionArgs.instruction);
+  assert.deepEqual(Object.keys(hostActions.at(-1).patch), ['prompt']);
+  const echoArgs = { action: 'update', id, requestId: 'synthetic-content-same-schedule', title: instructionOnly.plan.title, instruction: 'Synthetic rewrite with unchanged schedule echo.', schedule: { ...draft.schedule, enabled: true } };
+  const echoResult = await execute('content-update-with-unchanged-schedule-echo', echoArgs);
+  assert.equal(echoResult.plan.instruction, echoArgs.instruction);
+  assert.deepEqual(taskRows[0].schedule, originalSchedule);
+  await rejectWithoutWrite('mixed-content-and-clock-changes', { action: 'update', id, requestId: 'synthetic-mixed-reject', instruction: 'Synthetic should not be saved.', schedule: { ...draft.schedule, cron: '15 * * * *' } }, /内容|时间|分别|两次/);
+  for (const field of ['freeze', 'handover']) {
+    taskRows[0][field] = field === 'freeze' ? { goal: 'Synthetic preserved snapshot', progress: '', next: '', frozenAt: now } : { bundledAt: now, documents: [], scripts: [] };
+    await rejectWithoutWrite('protect-existing-' + field, { action: 'update', id, requestId: 'synthetic-protect-' + field, instruction: 'Synthetic refused rewrite.' }, /快照|交接|资料|freeze|handover/);
+    delete taskRows[0][field];
+  }
+  const guardedPrompt = taskRows[0].prompt;
+  taskRows[0].prompt = 'Synthetic externally changed prompt outside the My Fish wrapper.';
+  await rejectWithoutWrite('protect-unknown-prompt-template', { action: 'update', id, requestId: 'synthetic-unknown-prompt', instruction: 'Synthetic refused rewrite.' }, /模板|指令|内容|提示/);
+  taskRows[0].prompt = guardedPrompt;
+  const lostArgs = { action: 'update', id, requestId: 'synthetic-content-lost-receipt', instruction: 'Synthetic update committed before a lost receipt.' };
+  failAfterNextCommit = true;
+  await assert.rejects(execute('synthetic-lost-content-receipt', lostArgs), /synthetic receipt lost after commit/);
+  const afterLost = hostCalls;
+  assert.equal((await execute('retry-content-after-unknown-commit', lostArgs)).unchanged, true);
+  assert.equal(hostCalls, afterLost, 'unknown receipt recovery does not reapply content or create another task');
+  assert.deepEqual(taskRows[0].integrations, originalMarker);
   await execute('pause', { action: 'pause', id, requestId: 'synthetic-plan-pause' });
   assert.equal(taskRows[0].schedule.nextRunAt, undefined);
   await execute('update-paused', { action: 'update', id, requestId: 'synthetic-plan-update', schedule: { mode: 'cron', cron: '30 * * * *', timeZone: 'Asia/Shanghai' } });
   await execute('resume', { action: 'resume', id, requestId: 'synthetic-plan-resume' });
   taskRows[0].executions.push({ id: 'synthetic-execution-quiet', sessionId: workerId, startedAt: now, endedAt: undefined, result: undefined, error: undefined });
+  const frozen = await execute('list-content-frozen-after-execution', { action: 'list' });
+  assert.equal(frozen.plans[0].canEditContent, false);
+  await rejectWithoutWrite('changed-content-after-execution', { action: 'update', id, requestId: 'synthetic-frozen-reject', instruction: 'Synthetic refused after first execution.' }, /执行|冻结|只读/);
+  const beforeFrozenRetry = hostCalls;
+  assert.equal((await execute('equal-content-retry-after-execution', lostArgs)).unchanged, true);
+  assert.equal(hostCalls, beforeFrozenRetry);
   const report = { id, notify: false, summary: 'Synthetic source has no changes.' };
   await execute('quiet-report', report, workerId, 'assistant_plan_report');
   await execute('quiet-report-replay', report, workerId, 'assistant_plan_report');
@@ -142,7 +218,7 @@ try {
   await execute('list-cancelled', { action: 'list' });
   assert.equal(createCalls, 1);
   assert.equal(modelCalls, 0); assert.equal(networkCalls, 0);
-  console.log(JSON.stringify({ planToolJson: 'passed', checked, installedTaskBoard, installedPureTransitions: !!transitions, syntheticHostMutations: hostCalls, syntheticCreates: createCalls, modelCalls, networkCalls, realLedgerReads: 0, realLedgerWrites: 0 }));
+  console.log(JSON.stringify({ planToolJson: 'passed', checked, refused, checkedCount: checked.length, refusalCount: refused.length, installedTaskBoard, installedPureTransitions: !!transitions, syntheticHostMutations: hostCalls, syntheticCreates: createCalls, modelCalls, networkCalls, realLedgerReads: 0, realLedgerWrites: 0 }));
 } finally {
   for (const cleanup of effects.reverse()) cleanup();
   globalThis.fetch = originalFetch;

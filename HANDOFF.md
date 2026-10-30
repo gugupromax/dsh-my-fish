@@ -1,11 +1,12 @@
 # My Fish 开发交接
 
-当前 **0.6.2 开发预览版**。产品 My Fish，包和模块 dsh-my-fish。修正assistant_plan已保存但回执被无损JSON检查拒绝的问题；保留0.6.1固定聊天与真实工作区绑定。原计划、陪伴、人设、记忆、作息、权限和旧聊天保留。QQ未部署，B站仍只读简介/资料与有限评论。
+当前 **0.6.3 开发预览版**。产品 My Fish，包和模块 dsh-my-fish。补齐assistant_plan首次执行前的标题/指令更新，明确冻结与参数限制；保留0.6.2无损JSON修复和固定会话绑定。原计划、陪伴、人设、记忆、作息、权限和旧聊天保留。QQ未部署，B站仍只读简介/资料与有限评论。
 
 公开版本只提供 [通用角色模板](docs/ROLE_TEMPLATE.md)：My Fish、称用户“你”、自称“我”，兴趣为空。个人设定在本地工作区管理，不进入源码、示例或发行文档；升级不得覆盖已保存的本地角色。源码仓库目标为 [gugupromax/dsh-my-fish](https://github.com/gugupromax/dsh-my-fish)，远程内容和发行清单应由发布流程单独核对。
 
 ## 本版变化
 
+- update只传title/instruction时走真实看板原生内容动作，保持时间/权限和创建审计；有执行记录后明确冻结。list从实际只读prompt投影当前正文并给canEditContent/contentEditReason，不能把旧marker当修改后内容。实际内容与时间混改先拒绝，允许未改动字段原样回传；同内容未知回执重试安全无操作，保护freeze/handover。模型schema与后端统一id/taskId/planId，要求稳定requestId，拒绝冲突标识。
 - 计划回执显式投影公开schedule字段，省略undefined可选值；历史部分汇报也不补造缺失事实。SDK检查发生在render前，JSON.stringify不能代替结果规范化。安装版验证新增合成计划完整生命周期，并修正原snapshotJsonValue未检查返回值的假阳性。已有计划不迁移或重建，不读写真实账本。
 - 可信设置页选择真实宿主工作区及已有普通会话，切换插件引用并保留旧聊天；不创建、不投递、不合并，运行中/结果不明时拒绝切换。
 - SessionBinding独立读取分组与会话header元数据；有效主会话只核验和续用。首次创建用workspaceId，真实SDK不再用create复用已开始会话。跨创建目录不能硬移分组，明确要求选择组内已有会话。
