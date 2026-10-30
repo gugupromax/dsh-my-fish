@@ -7,7 +7,8 @@ import { Readable } from 'node:stream';
 import plugin from '../lib/index.js';
 import { Store } from '../lib/store.js';
 
-function fixture(t, { available = true, registryAvailable = true } = {}) {
+const NATIVE_PLAN_MODE = 'dsh-my-fish-plan-native';
+function fixture(t, { available = true, registryAvailable = true, runtimeAvailable = true, initialTasks = [] } = {}) {
   const previous = process.env.DSH_HOME;
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'my-fish-wiring-'));
   process.env.DSH_HOME = root;
@@ -20,7 +21,17 @@ function fixture(t, { available = true, registryAvailable = true } = {}) {
   const ordinary = { id: 'ordinary-agent', session: { id: 'ordinary-session' } };
   const all = [main, worker, child, ordinary];
   const registry = { list: () => all, isOwnedBy: (id, owner) => id === child.id && owner === worker };
-  const taskRows = [], hostCalls = [], requestCache = new Map();
+  const taskRows = structuredClone(initialTasks), hostCalls = [], requestCache = new Map();
+  const presetRows = new Map(), presetRegistrations = [];
+  const agentPresets = {
+    async register(definition) {
+      assert.equal(definition.id, NATIVE_PLAN_MODE);
+      assert.equal(presetRows.has(definition.id), false, 'native plan registration must have a single owner');
+      presetRows.set(definition.id, definition); presetRegistrations.push(definition);
+      return () => { if (presetRows.get(definition.id) === definition) presetRows.delete(definition.id); };
+    },
+    async resolve(id) { return presetRows.has(id) ? { id } : undefined; },
+  };
   const host = {
     snapshot: () => ({ tasks: structuredClone(taskRows), scheduler: { timeZone: 'Asia/Shanghai' } }),
     apply: async (requestId, action, initiator) => {
@@ -36,8 +47,10 @@ function fixture(t, { available = true, registryAvailable = true } = {}) {
         else if (action.kind === 'update') {
           assert.deepEqual(Object.keys(action).sort(), ['kind', 'patch', 'taskId']);
           assert.ok(Object.keys(action.patch).length > 0);
-          assert.ok(Object.keys(action.patch).every(key => ['title', 'prompt'].includes(key)), 'content updates cannot patch permissions, integrations or schedules');
-          if (task.archivedAt !== undefined || task.executions.length > 0) throw Error('task content is frozen after its first execution');
+          assert.ok(Object.keys(action.patch).every(key => ['title', 'prompt', 'mode'].includes(key)), 'native updates cannot patch permissions, integrations or schedules');
+          const content = Object.keys(action.patch).some(key => ['title', 'prompt'].includes(key));
+          if ('mode' in action.patch) assert.deepEqual(Object.keys(action.patch), ['mode'], 'runtime repair is a mode-only host action');
+          if (task.archivedAt !== undefined || (content && task.executions.length > 0)) throw Error('task content is frozen after its first execution');
           for (const [key, value] of Object.entries(action.patch)) task[key] = value.trim();
           // Mirror the native content transition so an unsafe update of a
           // continuation snapshot cannot be hidden by a more permissive mock.
@@ -51,6 +64,7 @@ function fixture(t, { available = true, registryAvailable = true } = {}) {
   const services = new Map();
   if (available) services.set('taskBoard', host);
   if (registryAvailable) services.set('agents', registry);
+  if (runtimeAvailable) services.set('agentPresets', agentPresets);
   function activate(row) {
     if (row.names.every(name => services.has(name))) {
       const childContext = Object.fromEntries(row.names.map(name => [name, services.get(name)]));
@@ -72,15 +86,19 @@ function fixture(t, { available = true, registryAvailable = true } = {}) {
     logger: { warn: () => {} },
   };
   plugin.apply(ctx);
-  t.after(() => {
-    for (const dispose of effects.reverse()) dispose();
-    for (const row of injections) for (const dispose of row.disposers.reverse()) dispose();
+  t.after(async () => {
+    for (const dispose of effects.reverse()) await dispose();
+    for (const row of injections) for (const dispose of row.disposers.reverse()) await dispose();
     if (previous === undefined) delete process.env.DSH_HOME; else process.env.DSH_HOME = previous;
     assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
     assert.ok(path.basename(root).startsWith('my-fish-wiring-'));
     fs.rmSync(root, { recursive: true, force: true });
   });
   const run = (name, args, subject = main) => tools.get(name).execute(args, { agent: subject, signal: new AbortController().signal });
+  async function waitFor(predicate) {
+    const until = Date.now() + 2000;
+    while (!predicate()) { if (Date.now() >= until) throw Error('synthetic runtime condition was not reached'); await new Promise(resolve => setImmediate(resolve)); }
+  }
   const callGuard = (name, args, subject = main) => guards[0]({ name, arguments: args, agent: subject });
   async function http(prefix, method, route, body, overrides = {}) {
     const req = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))]);
@@ -91,12 +109,19 @@ function fixture(t, { available = true, registryAvailable = true } = {}) {
     await routes.get(prefix)(req, res);
     return { status: res.statusCode, body: res.body };
   }
-  return { store, tools, routes, run, callGuard, http, taskRows, hostCalls, main, worker, child, ordinary, services,
+  return { store, tools, routes, run, callGuard, http, taskRows, hostCalls, main, worker, child, ordinary, services, agentPresets, presetRows, presetRegistrations, waitFor,
     connect: (name, value) => { services.set(name, value); for (const row of injections.filter(row => !row.active)) activate(row); },
     host, registry,
   };
 }
 const draft = requestId => ({ action: 'create', requestId, title: '受控测试计划', instruction: '仅查看公开测试资料，有变化才通知。', schedule: { mode: 'cron', cron: '0 * * * *', timeZone: 'Asia/Shanghai' } });
+const legacyPlan = (id, extra = {}) => ({
+  id, title: 'Synthetic legacy reading', description: 'Synthetic retained description', prompt: 'Synthetic retained read-only instructions',
+  mode: 'synthetic-legacy-ptc', permission: 'read-only', model: 'synthetic/model', reasoningEffort: 'synthetic-effort', reuseSession: false, goalRun: false,
+  schedule: { enabled: true, mode: 'cron', cron: '0 * * * *', timeZone: 'Asia/Shanghai', nextRunAt: 2000000000000, runCount: 3, maxRuns: 9 },
+  integrations: { 'dsh-my-fish': { kind: 'personal-plan', version: 1, fingerprint: 'synthetic-create-fingerprint', instruction: 'Synthetic original requirement' } },
+  executions: [], ...extra,
+});
 
 test('temporary snooze is a trusted settings-only operation with strict presets and no new model tool', async t => {
   const f=fixture(t),before=JSON.stringify(f.store.state());
@@ -338,4 +363,107 @@ test('unrecognized host prompt is not presented as the old integration instructi
   const before = structuredClone(f.taskRows), calls = f.hostCalls.length;
   await assert.rejects(f.run('assistant_plan', { action: 'update', id, requestId: 'content-unrecognized-update', instruction: original.instruction }));
   assert.deepEqual(f.taskRows, before); assert.equal(f.hostCalls.length, calls);
+});
+
+test('new plans pin the registered native preset before the host create without enabling machine permissions', async t => {
+  const f = fixture(t), before = (await f.http('/my-fish/api', 'GET', 'permissions')).body.policy;
+  const created = await f.run('assistant_plan', draft('native-mode-create'));
+  assert.equal(f.presetRegistrations.length, 1);
+  assert.equal(f.presetRows.has(NATIVE_PLAN_MODE), true);
+  assert.equal(f.hostCalls.length, 1);
+  assert.equal(f.hostCalls[0].action.kind, 'create');
+  assert.equal(f.hostCalls[0].action.input.mode, NATIVE_PLAN_MODE);
+  assert.equal(f.taskRows[0].mode, NATIVE_PLAN_MODE);
+  assert.equal(created.plan.id, f.taskRows[0].id);
+  assert.equal(f.taskRows[0].permission, 'read-only');
+  assert.equal(f.taskRows[0].reuseSession, false); assert.equal(f.taskRows[0].goalRun, false);
+  f.taskRows[0].executions.push({ id: 'synthetic-native-run', sessionId: f.worker.session.id, startedAt: Date.now() });
+  assert.equal(typeof f.callGuard('assistant_context', {}, f.worker), 'string', 'the read assertion must come from an actual plan scope');
+  assert.equal(f.callGuard('x_whale_status', {}, f.worker), undefined);
+  assert.equal(typeof f.callGuard('run_code', {}, f.worker), 'string');
+  assert.equal((await f.http('/my-fish/api', 'GET', 'permissions')).body.policy.shell, false);
+  assert.deepEqual((await f.http('/my-fish/api', 'GET', 'permissions')).body.policy, before);
+});
+
+test('missing or broken preset service refuses creation before a host task and late service arrival enables it', async t => {
+  const f = fixture(t, { runtimeAvailable: false });
+  await assert.rejects(f.run('assistant_plan', draft('native-service-late')), /预设|原生|native|就绪|不可用/i);
+  assert.equal(f.hostCalls.length, 0); assert.equal(f.taskRows.length, 0);
+  f.connect('agentPresets', f.agentPresets);
+  await f.run('assistant_plan', draft('native-service-late'));
+  assert.equal(f.hostCalls.length, 1); assert.equal(f.taskRows[0].mode, NATIVE_PLAN_MODE);
+  f.agentPresets.resolve = async () => ({ id: NATIVE_PLAN_MODE, broken: 'Synthetic unavailable module' });
+  await assert.rejects(f.run('assistant_plan', draft('native-service-broken')), /预设|原生|native|就绪|不可用|损坏/i);
+  assert.equal(f.hostCalls.length, 1); assert.equal(f.taskRows.length, 1);
+});
+
+test('startup repairs only owned legacy modes and retains active executions, original instructions and schedules', async t => {
+  const rows = [legacyPlan('synthetic-legacy-a'), legacyPlan('synthetic-legacy-b', { executions: [{ id: 'existing-open-run', sessionId: 'worker-session', startedAt: 10 }] }),
+    legacyPlan('synthetic-archived', { archivedAt: 20 }), { id: 'synthetic-unowned', mode: 'another-preset', prompt: 'Other task must stay untouched', executions: [] }];
+  const f = fixture(t, { initialTasks: rows });
+  await f.waitFor(() => f.taskRows[0].mode === NATIVE_PLAN_MODE && f.taskRows[1].mode === NATIVE_PLAN_MODE);
+  const result = await f.run('assistant_plan', { action: 'repair_runtime', requestId: 'native-startup-confirm' });
+  assert.equal(result.ok, true);
+  assert.equal(f.hostCalls.length, 2);
+  for (let index = 0; index < 2; index++) {
+    assert.equal(f.hostCalls[index].action.kind, 'update');
+    assert.deepEqual(f.hostCalls[index].action.patch, { mode: NATIVE_PLAN_MODE });
+    for (const key of ['id', 'title', 'description', 'prompt', 'integrations', 'schedule', 'permission', 'model', 'reasoningEffort', 'reuseSession', 'goalRun', 'executions']) assert.deepEqual(f.taskRows[index][key], rows[index][key], key + ' must survive native mode repair');
+  }
+  assert.deepEqual(f.taskRows[2], rows[2]); assert.deepEqual(f.taskRows[3], rows[3]);
+  await assert.rejects(f.run('assistant_plan', { action: 'repair_runtime', id: rows[3].id, requestId: 'native-refuse-unowned' }), /My Fish|本插件|计划/);
+  assert.deepEqual(f.taskRows[3], rows[3]); assert.equal(f.hostCalls.length, 2);
+  assert.equal(f.taskRows[1].executions[0].endedAt, undefined, 'mode repair does not complete, cancel or replay an active execution');
+  assert.equal(typeof f.callGuard('run_code', {}, f.worker), 'string');
+  assert.equal(f.callGuard('x_whale_status', {}, f.worker), undefined);
+});
+
+test('explicit native runtime repair is idempotent and changes only future mode even after an execution', async t => {
+  const f = fixture(t), created = await f.run('assistant_plan', draft('native-explicit-create')), id = created.plan.id;
+  await f.run('assistant_plan', { action: 'repair_runtime', requestId: 'native-explicit-startup-barrier' });
+  f.taskRows[0].mode = 'synthetic-old-ptc';
+  f.taskRows[0].executions.push({ id: 'prior-execution', sessionId: 'worker-session', startedAt: 10, endedAt: 20, result: 'failed' });
+  const before = structuredClone(f.taskRows[0]), state = f.store.state(), calls = f.hostCalls.length;
+  const request = { action: 'repair_runtime', id, requestId: 'native-explicit-repair' };
+  const fixed = await f.run('assistant_plan', request);
+  assert.equal(fixed.ok, true); assert.deepEqual(fixed.changed, [id]);
+  assert.deepEqual(f.hostCalls.at(-1).action.patch, { mode: NATIVE_PLAN_MODE });
+  for (const key of ['prompt', 'title', 'description', 'schedule', 'integrations', 'permission', 'model', 'reasoningEffort', 'executions']) assert.deepEqual(f.taskRows[0][key], before[key]);
+  assert.deepEqual(f.store.state(), state, 'repair must not clear assistant state or permission locks');
+  assert.equal((await f.run('assistant_plan', request)).ok, true);
+  assert.equal(f.hostCalls.length, calls + 1, 'same repair does not repeat a host mutation');
+  assert.deepEqual(fixed, JSON.parse(JSON.stringify(fixed)));
+});
+
+test('native runtime repair protects continuation data and never turns blocked rows into new tasks', async t => {
+  const f = fixture(t), created = await f.run('assistant_plan', draft('native-continuation-create')), id = created.plan.id;
+  await f.run('assistant_plan', { action: 'repair_runtime', requestId: 'native-continuation-startup-barrier' });
+  for (const key of ['freeze', 'handover']) {
+    const task = f.taskRows[0]; task.mode = 'synthetic-old-ptc'; task[key] = { synthetic: 'retained continuation data' };
+    const before = structuredClone(task), calls = f.hostCalls.length;
+    const result = await f.run('assistant_plan', { action: 'repair_runtime', id, requestId: 'native-protect-' + key });
+    assert.ok(result.blocked.some(row => row.id === id && typeof row.reason === 'string'));
+    assert.deepEqual(task, before); assert.equal(f.hostCalls.length, calls);
+    delete task[key];
+  }
+  assert.equal(f.taskRows.length, 1);
+});
+
+test('runtime repair uses both trusted API routes while ordinary and plan sessions cannot manage their preset', async t => {
+  const f = fixture(t), created = await f.run('assistant_plan', draft('native-trust-create')), id = created.plan.id;
+  await f.run('assistant_plan', { action: 'repair_runtime', requestId: 'native-trust-startup-barrier' });
+  assert.ok(f.tools.get('assistant_plan').parameters.properties.action.enum.includes('repair_runtime'));
+  for (const prefix of ['/my-fish/api', '/x-whale/api']) {
+    f.taskRows[0].mode = 'synthetic-old-ptc'; const calls = f.hostCalls.length;
+    const body = { action: 'repair_runtime', id, requestId: 'native-route-' + prefix };
+    assert.equal((await f.http(prefix, 'POST', 'plans', body, { origin: 'https://untrusted.invalid' })).status, 403);
+    assert.equal(f.hostCalls.length, calls);
+    const result = await f.http(prefix, 'POST', 'plans', body);
+    assert.equal(result.status, 200); assert.deepEqual(result.body.changed, [id]);
+  }
+  f.taskRows[0].executions.push({ id: 'current-plan-run', sessionId: 'worker-session', startedAt: 30 });
+  const calls = f.hostCalls.length;
+  for (const subject of [f.ordinary, f.worker]) await assert.rejects(f.run('assistant_plan', { action: 'repair_runtime', id, requestId: 'native-forbidden-' + subject.id }, subject));
+  await assert.rejects(f.run('assistant_plan', { action: 'repair_runtime', id, requestId: 'native-no-arbitrary-mode', mode: 'dangerous-custom-mode' }));
+  assert.equal(f.hostCalls.length, calls);
 });

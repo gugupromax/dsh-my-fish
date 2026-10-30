@@ -15,6 +15,8 @@ const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'my-fish-plan-json-')
 const previousHome = process.env.DSH_HOME;
 const effects = [], definitions = new Map(), taskRows = [], requests = new Map(), checked = [];
 const mainId = 'synthetic-plan-main', workerId = 'synthetic-plan-worker';
+const presetDefinitions=new Map();
+const agentPresets={register:async definition=>{presetDefinitions.set(definition.id,definition);return()=>presetDefinitions.delete(definition.id);},resolve:async id=>presetDefinitions.get(id)};
 const now = Date.now(), nextRunAt = now + 3600000;
 const originalFetch = globalThis.fetch;
 let hostCalls = 0, createCalls = 0, modelCalls = 0, networkCalls = 0, failAfterNextCommit = false;
@@ -102,7 +104,7 @@ try {
     connection: { requestRejection: () => undefined },
     tools: { register(definition) { definitions.set(definition.name, definition); return () => definitions.delete(definition.name); } },
     webServer: { register: () => () => {} },
-    inject(names, callback) { if (names.length === 1 && names[0] === 'taskBoard') callback({ taskBoard: host, effect(fn) { const cleanup = fn(); if (typeof cleanup === 'function') effects.push(cleanup); } }); },
+    inject(names, callback) { if(names.length===1&&['taskBoard','agentPresets'].includes(names[0]))callback({[names[0]]:names[0]==='taskBoard'?host:agentPresets,effect(fn){const cleanup=fn();if(typeof cleanup==='function')effects.push(cleanup);}}); },
     effect(fn) { const cleanup = fn(); if (typeof cleanup === 'function') effects.push(cleanup); },
     logger: { warn: () => {} },
   });

@@ -1,6 +1,6 @@
 # My Fish 开发交接
 
-当前 **0.6.4 开发预览版**。产品 My Fish，包和模块 dsh-my-fish。补齐提问、历史检索、看板列表及上下文压缩的权限分类，保留0.6.3计划内容更新及预算耗尽回执确认。原计划、陪伴、人设、记忆、作息、权限和旧聊天保留。QQ未部署，B站仍只读简介/资料与有限评论。
+当前 **0.6.5 开发预览版**。产品 My Fish，包和模块 dsh-my-fish。计划使用专用原生只读预设，启动修复普通旧计划后续工具通道；脚本执行仍禁止。补齐个人grep/task_board_get，增加加载版本诊断。原计划、陪伴、人设、记忆、作息、权限和旧聊天保留。QQ未部署，B站仍只读简介/资料与有限评论。
 
 2026-10-30本机宿主已升级0.2.1-rc.5；原有全部安装版隔离验证及399项Node回归重跑通过，未发现需要改运行时代码的兼容问题。包的既有DSH版本范围已包含rc5，不更改依赖、权限、个人数据或会话。公开prompt签名仍是(request,signal)，不能把内部命令层source参数误认为破坏性变更；详细证据见VALIDATION.md与docs/HOST_INTEGRATION.md。
 
@@ -8,6 +8,9 @@
 
 ## 本版变化
 
+- 计划固定dsh-my-fish-plan-native，显式native展示，不再继承全局PTC。agentPresets注册/解析成功后才创建；预设只读模块及公共restrict掩码保留原生读取和报告，隐藏已知个人/写工具。真实模型可见工具列表与真实Tools调用均有隔离验证，不只直调execute。
+- agentPresets/taskBoard连接后，使用公开update只改普通旧计划mode；旧会话与执行记录保留、时间正文权限不变。repair_runtime可在主会话核对修复；已开始的旧PTC轮次不换通道不补跑。续接/交接、父子任务、权限或执行方式改变的计划明确blocked，避免宿主更高优先级预设覆盖或清除资料。
+- grep/task_board_get在主会话和真实个人子孙可用；计划拒绝两者。公开runtime版本与规则号在模块加载时固定，可用assistant_capabilities或可信permissions接口核对；未知工具错误也附运行版本，区分旧轮次/旧加载与当前规则。
 - ask_user_question/session_event_search/task_board_list/compress不再被主会话未知分类误拦；不改用户权限文件。计划不读取其他卡片或其他会话、不弹出交互问题，问题走assistant_plan_report；当前会话压缩仍属于上下文维护。精确名单不扩展到task_board写操作或decompress。守卫分类与工具实际可见/连接/执行分开验证。
 - update只传title/instruction时走真实看板原生内容动作，保持时间/权限和创建审计；有执行记录后明确冻结。list从实际只读prompt投影当前正文并给canEditContent/contentEditReason，不能把旧marker当修改后内容。实际内容与时间混改先拒绝，允许未改动字段原样回传；同内容未知回执重试安全无操作，保护freeze/handover。模型schema与后端统一id/taskId/planId，要求稳定requestId，拒绝冲突标识。
 - 计划回执显式投影公开schedule字段，省略undefined可选值；历史部分汇报也不补造缺失事实。SDK检查发生在render前，JSON.stringify不能代替结果规范化。安装版验证新增合成计划完整生命周期，并修正原snapshotJsonValue未检查返回值的假阳性。已有计划不迁移或重建，不读写真实账本。

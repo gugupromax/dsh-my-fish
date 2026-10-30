@@ -14,6 +14,11 @@
 
 ## 主会话和执行会话
 
+0.6.5固定`mode: dsh-my-fish-plan-native`。这里的mode是代理预设ID，不是工具模式本身；宿主standard预设没有显式覆盖工具展示时也可能继承PTC，不能靠名称判断。插件通过agentPresets公开注册独立预设，明确使用native展示、时间上下文、只读文件和网页模块，并通过公共tools.restrict隐藏已知全局个人/写工具。其他未知工具仍受守卫拒绝，不因此授权脚本、任意命令或社交写入。
+
+创建前必须ensureReady确认注册及resolve成功，失败不保存卡片、不退回默认PTC。服务连接后启动修复仅对本插件普通旧卡片发送公开`update {patch:{mode}}`，不改正文/规则/权限或新建计划。卡片有续接/交接资料、父子关系或执行权限/复用方式改变时blocked，避免原生更新清除资料或宿主强制预设覆盖；修复结果可在主会话`assistant_plan {action:'repair_runtime',requestId,id?}`核对，不填id核对全部本插件计划。已有旧执行会话不会更换其已锁定预设，也不会补跑。
+
+列表的agentPreset/requiredPreset/requiresRuntimeRepair/runtimeRepairBlocked区分卡片配置与限制，不把卡片字段当作真实模型已经执行。assistant_capabilities.nativePlans只给公开预设和修复计数；runtime给实际加载版本。正常主会话与全局默认工具模式不被改变。
 个人主会话负责接受用户意图和管理计划。定时计划通过任务看板启动**独立只读会话**，不会重新创建或覆盖个人主会话，也不会把旧 `reuseSession` 错认成“固定进入个人主会话”。创建时明确固定 `permission: read-only`、`goalRun: false`、`reuseSession: false`、`applyCardDefaults: false`，并且不采纳看板上可能更宽的“新卡片默认权限”。兼容 0.4.8 与 0.4.11 的共同创建字段：省略 `teamRun`；0.4.8 只有显式 `true` 才开启团队模式，0.4.11 已移除此创建字段并拒绝未知字段。没有向执行提示中自动复制用户个人记忆或角色正文。
 
 公开文档和示例只使用 [通用角色模板](ROLE_TEMPLATE.md) 与合成计划。使用者的个人角色、兴趣和实际计划保留为本地运行数据，不属于公开源码包。

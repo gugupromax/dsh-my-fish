@@ -64,6 +64,10 @@ B站上游插件未注册可复用的bili_search等宿主工具；本版独立�
 
 ## taskBoard
 
+0.6.5通过agentPresets.register/resolve注册专用dsh-my-fish-plan-native，固定dsh-agent-tool-presentation.mode=native；卡片mode字段指向此预设。不能把standard名称当作native保证。生产自有模块以自身file URL作为Loader插件，仅在计划作用域调用公共tools.restrict隐藏已知全局私有/写工具；全局模式与个人预设不变。预设本地只读FS/web工具和报告保留。
+
+现有普通卡片通过公开update.patch.mode修复后续轮次，已执行的内容冻结不妨碍修改执行目标，但续接/交接、父子调度、复用/goal或权限变化会保护性阻断。现有活跃Agent不会被重新挂载或重放。verify-plan-native使用实际模型组装工具清单及实际Tools执行入口验证通道，补足此前仅校验接口和直接函数的边界。
+
 ```ts
 taskBoard.snapshot()
 taskBoard.apply(requestId, action, initiator?)

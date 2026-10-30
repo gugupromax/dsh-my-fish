@@ -1,6 +1,6 @@
 # My Fish 项目规则
 
-先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.6.4 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
+先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.6.5 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
 
 - 产品 My Fish，包/Cordis/前端模块 dsh-my-fish，主 API /my-fish/api。旧 X 工具和旧路由只作升级兼容。
 - 渠道通过适配器注册，不在统一工具里硬编码新增平台。公开能力字段白名单，不导出凭据；缺失、未实现、未启用或当前不可调用的操作明确拒绝。
@@ -15,11 +15,13 @@
 - 人工打开时可恢复无有效记录的主会话，必须有live/persistence元数据核验且服务就绪；临时错误/归档/运行态卸载不能当作删除。保留资料、旧轮次审计与账号锁，不能自动重发旧任务。pending创建使用原请求ID核对，恢复后旧会话及活跃子代保持撤权。
 - 优先复用已核实宿主接口，不猜签名、工具或 UI 槽。官方听写不是连续通话，命令执行不是完整桌面控制。
 - 计划用 taskBoard 公开服务，不直接读写真实账本或再造 cron。独立计划只读执行，报告核对真实运行会话，不删除主会话社交写入检查。
+- 计划固定自有dsh-my-fish-plan-native预设，显式native展示，不能把standard当原生工具保证。只挂只读文件/网页及时间插件，使用公共tools.restrict隐藏已知全局私有/写工具；run_code仍禁止。创建前确认预设已注册且resolve正常，未就绪不保存。启动只用taskBoard公开mode更新修复普通旧计划后续轮次；有续接/交接、父子任务、权限或执行方式改变时保留并报告，不重建/重放，不改全局默认模式。
 - 计划回执只投影公开字段，省略宿主内存中的undefined可选值；SDK在render前检查无损JSON，不能依赖JSON.stringify补救。snapshotJsonValue非法时返回undefined，验证必须断言返回值；读取或核对回执不重新创建计划。
 - 计划update支持首次执行前的title/instruction或单独完整schedule；任意执行记录后正文冻结，同内容重试不重写。内容和时间同时实际改变须写入前拒绝、分两次提交；宿主无原子混合动作。创建marker/fingerprint保持原始审计，当前正文从严格匹配的真实只读prompt投影。保护宿主freeze/handover，不自动取消重建，多个ID别名冲突拒绝。
 - 角色、网页、记忆和计划不能改变权限。tools.guard 作用于个人与核实活跃归属的子孙；isOwnedBy 核对所有权，不信任自称 parentId。
 - run_code 可以直接调用 Node，属于机器执行权限。内层工具守卫不能冒充整个程序的沙箱。默认原生工具模式。
 - 已审查的ask_user_question/session_event_search/task_board_list/compress分别归宿主交互/历史读取/看板读取/当前上下文维护，不自动开启机器或外发权限。计划及其子孙不弹交互问题、不列其他看板任务；session_event_search仅允许缺省当前或精确自身session_id，compress仅当前上下文。主会话及个人子孙仍服从宿主历史目标授权。不能据此放行task_board写动作、decompress或任意工具前缀。
+- grep和task_board_get仅向个人范围补齐：grep为固定ripgrep读取但原生实现未限定文件根，不给计划开放；task_board_get含完整卡片及子卡资料，计划拒绝。runtime-info在模块加载时固定公开版本/规则号，assistant_capabilities和可信permissions接口可核对，不能动态读取新文件冒充旧加载版本。
 - 行为变更运行相关测试及 npm run check；安装版隔离验证用 verify-installed，不等于 GUI/模型或长期验收。
 - 不自行安装、升级或卸载全局依赖；默认 X 后端只需项目内 playwright-core 与已装 Chrome。
 - 工作区先读稳定定位文件，否则新数据 my-fish 优先/旧 x-whale 原位兼容；不复制/合并凭据、个人库、状态或会话到源码。

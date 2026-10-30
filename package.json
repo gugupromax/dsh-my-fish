@@ -1,6 +1,6 @@
 {
   "name": "dsh-my-fish",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "My Fish：DSH 本地个人助理，独立记忆、持久任务与可管理权限",
   "repository": {
     "type": "git",
@@ -38,7 +38,7 @@
   ],
   "engines": {
     "node": ">=22",
-    "dsh": ">=0.2.1-rc.3 <0.3.0-0"
+    "dsh": ">=0.2.1-rc.5 <0.3.0-0"
   },
   "dsh": {
     "bundle": {

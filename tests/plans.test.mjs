@@ -6,6 +6,7 @@ import os from 'node:os';
 import * as nodeModule from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { Plans, PLAN_INTEGRATION, validCron, validateSchedule } from '../lib/plans.js';
+import { PLAN_PRESET_ID } from '../lib/plan-runtime.js';
 
 const NOW = Date.UTC(2026, 9, 25, 8);
 const schedule = { mode: 'cron', cron: '0 * * * *', timeZone: 'Asia/Shanghai' };
@@ -29,8 +30,8 @@ function fixture() {
         assert.ok(task);
         if (action.kind === 'archive') { task.archivedAt = NOW; task.schedule.enabled = false; }
         else if (action.kind === 'update') {
-          if (task.archivedAt !== undefined || task.executions.length) throw Error('content-frozen');
-          assert.ok(Object.keys(action.patch).every(key => ['title', 'prompt'].includes(key)));
+          if (task.archivedAt !== undefined || (task.executions.length && Object.keys(action.patch).some(key=>['title','prompt'].includes(key)))) throw Error('content-frozen');
+          assert.ok(Object.keys(action.patch).every(key => ['title', 'prompt','mode'].includes(key)));
           Object.assign(task, structuredClone(action.patch));
         }
         else {
@@ -49,8 +50,9 @@ function fixture() {
     if (notices.some(row => JSON.stringify(row.links) === JSON.stringify(notice.links))) return { notice: { id: 'notice-one' }, deduplicated: true };
     notices.push(structuredClone(notice)); return { notice: { id: 'notice-one' }, deduplicated: false };
   } };
-  const plans = new Plans({ getHost: () => host, assistant, store, now: () => NOW });
-  return { plans, host, store, assistant, calls, notices, rows: () => tasks, failNext: () => { failAfterCommit = true; } };
+  const runtime={ensureReady:async()=>PLAN_PRESET_ID};
+  const plans = new Plans({ getHost: () => host, getRuntime:()=>runtime, assistant, store, now: () => NOW });
+  return { plans, host, runtime, store, assistant, calls, notices, rows: () => tasks, failNext: () => { failAfterCommit = true; } };
 }
 
 test('plan availability is explicit and absence never creates an independent scheduler', async () => {
@@ -59,6 +61,50 @@ test('plan availability is explicit and absence never creates an independent sch
   assert.equal(plans.list().available, false);
   await assert.rejects(plans.create(input()), /任务看板未连接/);
   assert.equal(plans.isPlanSession(exec('unrelated')), false);
+});
+
+test('creating a plan fails before saving if its owned native preset is unavailable',async()=>{
+  const f=fixture(),unready=new Plans({getHost:()=>f.host,now:()=>NOW});
+  await assert.rejects(unready.create(input()),/原生工具预设/);assert.equal(f.calls.length,0);
+  f.runtime.ensureReady=async()=>{throw Error('synthetic unavailable preset');};
+  await assert.rejects(f.plans.create(input()),/unavailable/);assert.equal(f.calls.length,0);
+});
+
+test('runtime repair pins existing owned plans without changing old executions or any task content',async()=>{
+  const f=fixture(),{plan}=await f.plans.create(input());
+  const task=f.rows()[0];delete task.mode;task.executions.push({id:'old-running',sessionId:'old-ptc-session',startedAt:NOW});
+  const before=structuredClone(task);
+  f.rows().push({id:'unrelated-card',mode:'ptc',executions:[]});
+  const result=await f.plans.repairRuntime({requestId:'native-repair'},'main');
+  assert.deepEqual(result.changed,[plan.id]);assert.equal(result.complete,true);
+  assert.deepEqual(task,{...before,mode:PLAN_PRESET_ID});
+  assert.deepEqual(f.calls.at(-1).action,{kind:'update',taskId:plan.id,patch:{mode:PLAN_PRESET_ID}});
+  assert.equal(f.calls.at(-1).initiator,'main');assert.equal(f.rows()[1].mode,'ptc');
+  assert.equal(f.plans.list().plans[0].requiresRuntimeRepair,false);
+  const calls=f.calls.length,retry=await f.plans.repairRuntime({requestId:'native-repair'},'main');
+  assert.deepEqual(retry.changed,[]);assert.deepEqual(retry.skipped,[plan.id]);assert.equal(f.calls.length,calls);
+});
+
+test('runtime repair preserves continuation data, changed execution policies and task hierarchies',async()=>{
+  for(const patch of [{freeze:{}},{handover:{}},{permission:'danger-full-access'},{reuseSession:true},{goalRun:true},{parentId:'synthetic-parent'}]){
+    const f=fixture(),{plan}=await f.plans.create(input());Object.assign(f.rows()[0],patch);delete f.rows()[0].mode;
+    const before=structuredClone(f.rows()[0]);
+    const result=await f.plans.repairRuntime({id:plan.id,requestId:'protected-native'});
+    assert.equal(result.complete,false);assert.equal(result.blocked.length,1);assert.deepEqual(result.changed,[]);
+    assert.deepEqual(f.rows()[0],before);assert.equal(f.calls.length,1);
+  }
+  const f=fixture(),{plan}=await f.plans.create(input());f.rows().push({id:'synthetic-child',parentId:plan.id,executions:[]});
+  assert.equal(f.plans.list().plans[0].requiresRuntimeRepair,true);
+  assert.equal((await f.plans.repairRuntime({requestId:'native-child'})).blocked.length,1);
+  assert.equal(f.calls.length,1);
+});
+
+test('an unknown repair receipt is reconciled by the saved mode without duplicate writes',async()=>{
+  const f=fixture(),{plan}=await f.plans.create(input());f.rows()[0].mode='ptc';f.failNext();
+  const first=await f.plans.repairRuntime({id:plan.id,requestId:'unknown-native'});
+  assert.equal(first.complete,false);assert.equal(f.rows()[0].mode,PLAN_PRESET_ID);
+  const calls=f.calls.length,retry=await f.plans.repairRuntime({id:plan.id,requestId:'unknown-native'});
+  assert.equal(retry.complete,true);assert.deepEqual(retry.skipped,[plan.id]);assert.equal(f.calls.length,calls);
 });
 
 test('schedules require a concrete IANA zone, correct grammar and future once times', () => {
@@ -414,7 +460,8 @@ test('installed task board source accepts real bridge actions and applies their 
   assert.ok(created);
   assert.equal(created.permission, 'read-only');
   for (const key of ['reuseSession', 'teamRun', 'goalRun']) assert.notEqual(created[key], true, key + ' must stay off');
-  for (const key of ['mode', 'model', 'reasoningEffort']) assert.equal(created[key], undefined, 'card defaults must not supply ' + key);
+  assert.equal(created.mode,PLAN_PRESET_ID,'plan uses its owned native preset rather than a host default');
+  for (const key of ['model', 'reasoningEffort']) assert.equal(created[key], undefined, 'card defaults must not supply ' + key);
   assert.equal(created.schedule.timeZone, 'Asia/Shanghai');
   assert.equal(created.schedule.nextRunAt, NOW + 3600000);
   // Real pure transitions, rather than JSON round-tripped mocks, retain own

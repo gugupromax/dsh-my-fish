@@ -12,7 +12,7 @@ test('memory and goals work from ordinary chats, corrections/forgetting reach th
   const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'assistant-integration-')),old=process.env.DSH_HOME;
   process.env.DSH_HOME=tmp;const tools=new Map(),effects=[],contexts=[];
   t.after(()=>{for(const cleanup of effects)cleanup();if(old===undefined)delete process.env.DSH_HOME;else process.env.DSH_HOME=old;fs.rmSync(tmp,{recursive:true,force:true});});
-  plugin.apply({sessionController:{},connection:{},tools:{register:d=>{tools.set(d.name,d);return ()=>{};}},webServer:{register:()=>()=>{}},effect:f=>effects.push(f()),logger:{warn:()=>{}},inject:(services,fn)=>{assert.ok(['systemPrompt','taskBoard','agents','workingDirectory','sessions','sessionPersistence','workspaceRegistry'].includes(services[0]));if(services[0]==='systemPrompt')fn({systemPrompt:{context:d=>{contexts.push(d);return ()=>{};}}});}});
+  plugin.apply({sessionController:{},connection:{},tools:{register:d=>{tools.set(d.name,d);return ()=>{};}},webServer:{register:()=>()=>{}},effect:f=>effects.push(f()),logger:{warn:()=>{}},inject:(services,fn)=>{assert.ok(['systemPrompt','taskBoard','agents','agentPresets','workingDirectory','sessions','sessionPersistence','workspaceRegistry'].includes(services[0]));if(services[0]==='systemPrompt')fn({systemPrompt:{context:d=>{contexts.push(d);return ()=>{};}}});}});
   const exec={signal:new AbortController().signal,agent:{session:{id:'ordinary'}}};
   const call=(name,args)=>tools.get(name).execute(args,exec);
   const result=await call('assistant_memory',{action:'remember',text:'合成用户偏好火山分类的记忆方案',category:'preference',source:'合成夹具说明'});

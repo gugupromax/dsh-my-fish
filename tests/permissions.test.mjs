@@ -18,6 +18,25 @@ test('personal defaults deny shell, local writes, browser interaction, delegatio
   assert.throws(()=>policy.save({enabled:true}),/字段/);
   assert.throws(()=>policy.save({shell:'yes'}),/开关/);
 });
+
+test('file search and board details are classified without granting plan access to private cards',t=>{
+  const {store}=fixture(t),main=agent('main'),child=agent('child'),plan=agent('plan'),planChild=agent('plan-child'),rows=[main,child,plan,planChild];
+  const policy=new Permissions(store,{isPlanSession:exec=>exec.agent===plan,getRegistry:()=>({list:()=>rows,isOwnedBy:(id,owner)=>(id===child.id&&owner===main)||(id===planChild.id&&owner===plan)})});
+  for(const subject of [main,child])assert.equal(policy.guard(call('grep',{pattern:'synthetic public material',path:'./'},subject)),undefined);
+  for(const subject of [plan,planChild])assert.match(policy.guard(call('grep',{pattern:'synthetic public material',path:'./'},subject)),/计划|目录/);
+  for(const subject of [main,child])assert.equal(policy.guard(call('task_board_get',{taskId:'synthetic-card'},subject)),undefined);
+  for(const subject of [plan,planChild])assert.match(policy.guard(call('task_board_get',{taskId:'synthetic-card'},subject)),/计划|个人/);
+  assert.match(policy.guard(call('grep_unreviewed',{},main)),/尚未纳入/);
+  assert.match(policy.guard(call('task_board_update',{},main)),/尚未纳入/);
+  assert.equal(policy.policy().shell,false);assert.equal(policy.policy().fileWrite,false);
+});
+
+test('permission snapshots identify the loaded code version using public package metadata only',t=>{
+  const {policy}=fixture(t),value=policy.snapshot(),pkg=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
+  assert.equal(value.runtime.plugin,'dsh-my-fish');assert.equal(value.runtime.version,pkg.version);
+  assert.equal(typeof value.runtime.permissionRevision,'string');
+  assert.deepEqual(value,JSON.parse(JSON.stringify(value)));
+});
 test('outbound review rejects secrets, encoded private phrases and local paths without echoing secret values',t=>{
   const {policy}=fixture(t);policy.save({privateTerms:['SYNTHETIC PRIVATE PHRASE']});
   for(const value of ['auth_token=synthetic-secret-value','https://example.test/?api_key=synthetic-secret-value','https://someone:synthetic-secret-value@example.test','SYNTHETIC%2520PRIVATE%2520PHRASE','E:\\example\\file.txt']){
