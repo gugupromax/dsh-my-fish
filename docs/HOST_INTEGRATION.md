@@ -1,6 +1,8 @@
 # My Fish 宿主集成
 
-已核对 DSH Desktop 0.2.1-rc.3、taskBoard 0.4.8 公开发布源码及本机安装的 0.4.11 纯源码契约。计划创建使用两版共有字段，省略 0.4.11 已移除的 `teamRun`（0.4.8 缺省不开启），保留明确只读、关闭 goal/历史会话复用及不采纳新卡片默认配置。源码契约/隔离验证不代表真实 profile 已安装 My Fish 或实际任务已创建。
+已核对 DSH Desktop 0.2.1-rc.3 与0.2.1-rc.5；taskBoard历史基线为0.4.8公开发布源码、0.4.11纯源码契约，当前本机0.4.12的纯状态转换及工具接线也通过隔离验证。计划创建使用共有字段，省略0.4.11起移除的`teamRun`（0.4.8缺省不开启），保留明确只读、关闭goal/历史会话复用及不采纳新卡片默认配置。源码契约/隔离验证不代表实际任务已创建或完成。
+
+2026-10-30在实际rc5可执行文件下重跑全部verify-installed：23工具/6状态JSON、计划26组成功及5组预先拒绝、上下文/陪伴事件、真实Tools守卫、搜索桥接、工作目录、会话元数据与Controller分组均通过；完整Node回归399项通过。rc5公开SessionController.prompt仍接受(request,signal)，内部生成source.kind=user及rpcId后委派给命令层；不能把内部commands.prompt(request,source)误当成公开签名变化。已有程序投递排除规则仍适用。create仍要求workspaceId与cwd互斥，attach仍核对原始header.cwd。
 
 ## 主会话
 

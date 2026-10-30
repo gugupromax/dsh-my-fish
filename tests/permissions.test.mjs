@@ -58,6 +58,78 @@ test('retired main and its remaining runtime-owned children do not become unrest
   const {store}=fixture(t),old=agent('retired-main'),child=agent('retired-child'),main=agent('main'),ordinary=agent('ordinary'),rows=[old,child,main,ordinary];
   store.saveState({...store.state(),retiredSessionIds:[old.id]});
   const policy=new Permissions(store,{getRegistry:()=>({list:()=>rows,isOwnedBy:(id,owner)=>id===child.id&&owner===old})});policy.save({shell:true,delegation:true});
-  for(const subject of [old,child])for(const name of ['pwsh','web_search','assistant_context'])assert.match(policy.guard(call(name,{},subject)),/失效/);
+  for(const subject of [old,child])for(const name of ['pwsh','web_search','assistant_context','ask_user_question','session_event_search','task_board_list','compress'])assert.match(policy.guard(call(name,{},subject)),/失效/);
   assert.equal(policy.guard(call('pwsh',{},main)),undefined);assert.equal(policy.guard(call('pwsh',{},ordinary)),undefined);
+});
+
+test('personal host interaction and read tools remain available without machine permissions while plan compression stays local',t=>{
+  const {store}=fixture(t),main=agent('main'),child=agent('personal-child'),grandchild=agent('personal-grandchild'),plan=agent('plan-root'),planChild=agent('plan-child'),ordinary=agent('ordinary');
+  ordinary.session.parentId=main.id;
+  const rows=[main,child,grandchild,plan,planChild,ordinary],owners=new Map([[child,main],[grandchild,child],[planChild,plan]]);
+  const policy=new Permissions(store,{isPlanSession:exec=>exec.agent===plan,getRegistry:()=>({list:()=>rows,isOwnedBy:(id,owner)=>rows.some(row=>row.id===id&&owners.get(row)===owner)})});
+  const localTools=['ask_user_question','session_event_search','task_board_list','compress'];
+  const state=structuredClone(store.state()),before=policy.policy();
+  assert.deepEqual([before.shell,before.fileWrite,before.browserInteract,before.delegation],[false,false,false,false]);
+  assert.equal(policy.scope(call('compress',{},child)),'descendant');
+  assert.equal(policy.scope(call('compress',{},grandchild)),'descendant');
+  assert.equal(policy.scope(call('compress',{},plan)),'plan');
+  assert.equal(policy.scope(call('compress',{},planChild)),'plan-descendant');
+  for(const subject of [main,child,grandchild,plan,planChild]){
+    for(const name of [main,child,grandchild].includes(subject)?localTools:['compress'])assert.equal(policy.guard(call(name,{},subject)),undefined,subject.id+' / '+name);
+    assert.match(policy.guard(call('unreviewed_new_host_tool',{},subject)),/尚未纳入|分类/);
+    for(const name of ['pwsh','run_code','write','edit','bsk_interact','subagent','spawn_teammate','send_message'])assert.equal(typeof policy.guard(call(name,{},subject)),'string',subject.id+' / '+name);
+  }
+  assert.equal(policy.scope(call('compress',{},ordinary)),null,'a stored parent claim is not live runtime ownership');
+  for(const name of localTools)assert.equal(policy.guard(call(name,{},ordinary)),undefined);
+  assert.deepEqual(policy.policy(),before);assert.deepEqual(store.state(),state,'classification does not mutate permissions or session state');
+});
+
+test('new local host classifications preserve outbound secret and private-term review in every managed scope',t=>{
+  const {store}=fixture(t),main=agent('main'),child=agent('personal-child'),plan=agent('plan-root'),planChild=agent('plan-child'),rows=[main,child,plan,planChild];
+  const owners=new Map([[child,main],[planChild,plan]]);
+  const policy=new Permissions(store,{isPlanSession:exec=>exec.agent===plan,getRegistry:()=>({list:()=>rows,isOwnedBy:(id,owner)=>rows.some(row=>row.id===id&&owners.get(row)===owner)})});
+  policy.save({privateTerms:['SYNTHETIC PRIVATE PHRASE']});
+  for(const subject of rows){
+    for(const name of [main,child].includes(subject)?['ask_user_question','session_event_search','task_board_list','compress']:['compress'])assert.equal(policy.guard(call(name,{},subject)),undefined);
+    for(const [name,args] of [
+      ['web_search',{query:'SYNTHETIC%2520PRIVATE%2520PHRASE'}],
+      ['web_fetch',{url:'https://example.test/?access_token=synthetic-secret-value'}],
+      ['social_search',{platform:'bilibili',query:'E:\\synthetic\\private.txt'}],
+    ]){
+      const reason=policy.guard(call(name,args,subject));assert.equal(typeof reason,'string',subject.id+' / '+name);
+      assert.ok(!reason.includes('synthetic-secret-value'));assert.ok(!reason.includes('SYNTHETIC PRIVATE PHRASE'));
+    }
+    assert.equal(policy.guard(call('web_search',{query:'public release notes'},subject)),undefined);
+  }
+  assert.deepEqual([policy.policy().shell,policy.policy().fileWrite,policy.policy().browserInteract,policy.policy().delegation],[false,false,false,false]);
+});
+
+test('allowing task-board listing never grants plan management, writes or delegation even under broader main policy',t=>{
+  const {store}=fixture(t),main=agent('main'),plan=agent('plan-root'),child=agent('plan-child'),rows=[main,plan,child];
+  const policy=new Permissions(store,{isPlanSession:exec=>exec.agent===plan,getRegistry:()=>({list:()=>rows,isOwnedBy:(id,owner)=>id===child.id&&owner===plan})});
+  policy.save({shell:true,fileWrite:true,browserInteract:true,delegation:true});
+  for(const subject of [plan,child]){
+    assert.equal(policy.guard(call('compress',{},subject)),undefined);
+    for(const name of ['ask_user_question','task_board_list'])assert.match(policy.guard(call(name,{},subject)),/计划|个人/);
+    for(const name of ['assistant_plan','assistant_memory','assistant_context','assistant_wake','social_action','x_whale_reply','pwsh','run_code','write','bsk_interact','subagent','spawn_teammate','send_message','task_board_create','task_board_update','task_board_archive','task_board_execute'])assert.equal(typeof policy.guard(call(name,{},subject)),'string',subject.id+' / '+name);
+    assert.equal(policy.guard(call('assistant_plan_report',{},subject)),undefined);
+    assert.match(policy.guard(call('task_board_unreviewed_action',{},subject)),/尚未纳入|分类/);
+  }
+  for(const name of ['task_board_create','task_board_update','task_board_archive','task_board_execute'])assert.match(policy.guard(call(name,{},main)),/尚未纳入|分类/,'no prefix wildcard authorizes '+name);
+});
+
+test('plan history search is confined to its own current session while personal chats retain native host authorization',t=>{
+  const {store}=fixture(t),main=agent('main'),personalChild=agent('personal-child'),plan=agent('plan-root'),planChild=agent('plan-child'),rows=[main,personalChild,plan,planChild];
+  const owners=new Map([[personalChild,main],[planChild,plan]]);
+  const policy=new Permissions(store,{isPlanSession:exec=>exec.agent===plan,getRegistry:()=>({list:()=>rows,isOwnedBy:(id,owner)=>rows.some(row=>row.id===id&&owners.get(row)===owner)})});
+  for(const subject of [plan,planChild]){
+    assert.equal(policy.guard(call('session_event_search',{query:'synthetic current-session fact'},subject)),undefined);
+    assert.equal(policy.guard(call('session_event_search',{query:'synthetic current-session fact',session_id:subject.session.id},subject)),undefined);
+    for(const target of [main.id,personalChild.id,subject===plan?planChild.id:plan.id,'another-synthetic-session','',null,0,false,[],{}]){
+      const reason=policy.guard(call('session_event_search',{query:'synthetic lookup',session_id:target},subject));
+      assert.match(reason,/计划|当前|会话/,subject.id+' cannot inspect '+JSON.stringify(target));
+    }
+  }
+  for(const subject of [main,personalChild])assert.equal(policy.guard(call('session_event_search',{query:'synthetic native-host-scope lookup',session_id:'another-same-workspace-session'},subject)),undefined,'the host remains responsible for authorizing personal native-scope searches');
+  assert.deepEqual([policy.policy().shell,policy.policy().fileWrite,policy.policy().browserInteract,policy.policy().delegation],[false,false,false,false]);
 });

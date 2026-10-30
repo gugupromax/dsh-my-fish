@@ -302,6 +302,25 @@ test('update parameters give actionable errors and reject conflicting aliases or
   assert.equal(sameAliases.plan.title, 'Synthetic new title');
 });
 
+test('schedule confirmation accepts the host stopping a plan whose reduced run budget is already spent', async () => {
+  const f = fixture(), { plan } = await f.plans.create({ ...input(), schedule: { ...schedule, maxRuns: 8 } });
+  f.rows()[0].schedule.runCount = 3;
+  const apply = f.host.apply;
+  f.host.apply = async (...args) => {
+    await apply(...args);
+    const task = f.rows()[0];
+    // The native applySetSchedule transition disarms an already-spent budget.
+    if (task.schedule.enabled && task.schedule.maxRuns <= task.schedule.runCount) Object.assign(task.schedule, { enabled: false, nextRunAt: undefined, endedAt: NOW, endedReason: 'limit' });
+    return f.host.snapshot();
+  };
+  const result = await f.plans.manage({ action: 'update', id: plan.id, requestId: 'spent-budget', schedule: { ...schedule, maxRuns: 2 } });
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.schedule.enabled, false);
+  assert.equal(result.plan.schedule.runCount, 3);
+  assert.equal(result.plan.schedule.endedReason, 'limit');
+  assert.equal(result.plan.nextRunAt, null);
+});
+
 test('reports derive the open execution from actual calling session and reject spoofed identifiers', async () => {
   const f = fixture(), { plan } = await f.plans.create(input());
   f.rows()[0].executions.push({ id: 'host-run', sessionId: 'worker', startedAt: NOW });
@@ -416,6 +435,13 @@ test('installed task board source accepts real bridge actions and applies their 
     actualTasks = transition.tasks;
     checkProjection();
   }
+  actualTasks = actualTasks.map(row => ({ ...row, schedule: { ...row.schedule, enabled: true, maxRuns: 8, runCount: 3 } }));
+  const exhausted = applySetSchedule(actualTasks, created.id, { ...schedule, enabled: true, maxRuns: 2 }, NOW, 'UTC');
+  assert.equal(exhausted.applied, true);
+  assert.equal(exhausted.tasks[0].schedule.enabled, false);
+  assert.equal(exhausted.tasks[0].schedule.runCount, 3);
+  assert.equal(exhausted.tasks[0].schedule.endedReason, 'limit');
+  assert.equal(exhausted.tasks[0].schedule.nextRunAt, undefined);
   const task = { id: 'synthetic-only', executions: [], status: 'todo' };
   const changed = applySetSchedule([task], task.id, { ...schedule, enabled: true }, NOW, 'UTC');
   assert.equal(changed.applied, true);

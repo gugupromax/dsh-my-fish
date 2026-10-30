@@ -1,6 +1,6 @@
 # My Fish 项目规则
 
-先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.6.3 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
+先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.6.4 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
 
 - 产品 My Fish，包/Cordis/前端模块 dsh-my-fish，主 API /my-fish/api。旧 X 工具和旧路由只作升级兼容。
 - 渠道通过适配器注册，不在统一工具里硬编码新增平台。公开能力字段白名单，不导出凭据；缺失、未实现、未启用或当前不可调用的操作明确拒绝。
@@ -19,6 +19,7 @@
 - 计划update支持首次执行前的title/instruction或单独完整schedule；任意执行记录后正文冻结，同内容重试不重写。内容和时间同时实际改变须写入前拒绝、分两次提交；宿主无原子混合动作。创建marker/fingerprint保持原始审计，当前正文从严格匹配的真实只读prompt投影。保护宿主freeze/handover，不自动取消重建，多个ID别名冲突拒绝。
 - 角色、网页、记忆和计划不能改变权限。tools.guard 作用于个人与核实活跃归属的子孙；isOwnedBy 核对所有权，不信任自称 parentId。
 - run_code 可以直接调用 Node，属于机器执行权限。内层工具守卫不能冒充整个程序的沙箱。默认原生工具模式。
+- 已审查的ask_user_question/session_event_search/task_board_list/compress分别归宿主交互/历史读取/看板读取/当前上下文维护，不自动开启机器或外发权限。计划及其子孙不弹交互问题、不列其他看板任务；session_event_search仅允许缺省当前或精确自身session_id，compress仅当前上下文。主会话及个人子孙仍服从宿主历史目标授权。不能据此放行task_board写动作、decompress或任意工具前缀。
 - 行为变更运行相关测试及 npm run check；安装版隔离验证用 verify-installed，不等于 GUI/模型或长期验收。
 - 不自行安装、升级或卸载全局依赖；默认 X 后端只需项目内 playwright-core 与已装 Chrome。
 - 工作区先读稳定定位文件，否则新数据 my-fish 优先/旧 x-whale 原位兼容；不复制/合并凭据、个人库、状态或会话到源码。
