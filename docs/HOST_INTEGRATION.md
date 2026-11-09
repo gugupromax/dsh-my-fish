@@ -1,5 +1,11 @@
 # My Fish 宿主集成
 
+2026-11-09当前本机DSH0.2.2-rc.1、任务看板0.4.16已完成全部安装版隔离重验，Node回归421项通过。以下rc3/rc5及旧看板版本为历史基线。
+
+0.2.2的ToolsService.execute改为批量calls入口，旧mode配置和内部scheduler接口已移除。B站嵌套搜索由host-tool-invoke经公共Loader.import('@deepseek-ai/dsh-tools/pipeline')取得ToolExecutionPipeline，保留parent/rootCallId/agent/signal/toolSet，走prepare/dispatch/complete全部策略；不能用batch转换或definition.execute代替嵌套边界。工具可见性也按当步toolSet判断。旧宿主单调用分支保留。
+
+安装版验证使用实际native/PTC executor；生产预设的dsh-agent-tool-presentation兼容包装在当前版本仍可用，未因其deprecated标签擅自改全局配置。工作区、会话控制器、消息来源、元数据和归属接口均保持，新增依赖只在合成测试环境补齐。
+
 已核对 DSH Desktop 0.2.1-rc.3 与0.2.1-rc.5；taskBoard历史基线为0.4.8公开发布源码、0.4.11纯源码契约，当前本机0.4.12的纯状态转换及工具接线也通过隔离验证。计划创建使用共有字段，省略0.4.11起移除的`teamRun`（0.4.8缺省不开启），保留明确只读、关闭goal/历史会话复用及不采纳新卡片默认配置。源码契约/隔离验证不代表实际任务已创建或完成。
 
 2026-10-30在实际rc5可执行文件下重跑全部verify-installed：23工具/6状态JSON、计划26组成功及5组预先拒绝、上下文/陪伴事件、真实Tools守卫、搜索桥接、工作目录、会话元数据与Controller分组均通过；完整Node回归399项通过。rc5公开SessionController.prompt仍接受(request,signal)，内部生成source.kind=user及rpcId后委派给命令层；不能把内部commands.prompt(request,source)误当成公开签名变化。已有程序投递排除规则仍适用。create仍要求workspaceId与cwd互斥，attach仍核对原始header.cwd。

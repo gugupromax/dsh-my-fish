@@ -1,6 +1,8 @@
 # My Fish 代码地图
 
-当前 0.6.5，包和宿主/前端模块 dsh-my-fish。
+当前 0.6.6，包和宿主/前端模块 dsh-my-fish。
+
+host-tool-invoke.js封装新旧宿主的受守卫嵌套工具调用；0.2.2使用Loader公开导入pipeline，旧版保留单调用。scripts/host-tools-fixture.mjs适配安装版验证的executor及批量入口，不替代生产守卫或工具体。
 
 plan-runtime.js管理专用原生计划预设及作用域工具掩码；runtime-info.js在模块加载时固定公开构建版本。Plans负责公开mode修复，index在预设/看板连接后串行核对旧计划，不读取或改写真实账本文件。
 

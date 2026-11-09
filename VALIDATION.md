@@ -1,6 +1,29 @@
 # My Fish 验证记录
 
-日期：2026-10-30（北京时间）。当前 **0.6.5 开发预览版**。角色只提供通用模板；个人角色、记忆、连续兴趣、对话摘录、会话绑定、账号和工作文件不进入源码或公开包。
+日期：2026-11-09（北京时间）。当前 **0.6.6 开发预览版**。角色只提供通用模板；个人角色、记忆、连续兴趣、对话摘录、会话绑定、账号和工作文件不进入源码或公开包。
+
+## 0.6.6 DSH 0.2.2-rc.1 兼容
+
+实际安装文件FileVersion确认为0.2.2-rc.1，已安装任务看板为0.4.16。原验证最初在ToolRuntime配置mode处失败：新SDK已移除该配置及modeFor/wireSchemas/旧scheduler，执行由独立native/PTC executor承担。生产专用预设所用presentation插件仍保留兼容包装，实际挂载可用；不能把旧验证配置失败一概说成所有生产接口已坏。
+
+确认并修复的生产阻塞在B站宿主搜索：新版tools.execute接受批量calls，旧单次输入不兼容；直接包装单元素batch又会丢失parent/rootCallId。新host-tool-invoke通过Loader公开import加载ToolExecutionPipeline，完整prepare/必要时dispatch/complete，保留真实agent、signal、parent、rootCallId及当步toolSet。缺少来源或加载服务时失败，不退回直接调用工具体；旧宿主仍走原单调用。搜索和Social能力目录也传递toolSet，不将已注册但当步未准入的工具标为可执行。
+
+| 范围 | 结果 | 层级 |
+| --- | --- | --- |
+| npm run check | **421/421通过，无跳过** | 最终代码完整Node回归 |
+| 桥接/B站/权限专项 | **36/36通过** | 新旧边界、准入目录及apply_patch权限；421项子集 |
+| 安装版隔离脚本 | **10/10通过** | 实际0.2.2-rc.1 SDK与0.4.16纯看板转换 |
+| 模型工具面与计划 | 通过 | 实际executor/Loader/preset及Tools，原生状态/读取/报告和合成搜索可达 |
+| 宿主搜索嵌套调用 | 通过 | 实际公开pipeline，主/子作用域、真实parent/root、守卫先于工具体 |
+| 会话/工作区/个人上下文 | 通过 | 真实Controller、Registry、维护锁、元数据及合成事件 |
+
+新版验证先通过实际Tools.resolve形成当步准入，再从实际批量executor执行并观察tools/result；没有把工具直接执行当作批量接口验证。搜索桥接另验证：当步when=false及已结束调用的过期ToolSet都不发起嵌套搜索，守卫拒绝不进入provider，真实执行来源保留。为隔离环境补齐新AgentRegistry的sessionProjections依赖、Controller的typertGateway空事件源，以及pre-step前已要求的合成provider/model信息；真实模型计数仍为零。
+
+新增apply_patch归fileWrite权限，默认关闭；主会话明确开启文件写入后才允许，计划固定拒绝，并在专用预设的已知全局掩码中隐藏。现有只读FS配置下applyPatch默认false，没有新增计划写入权限。未修改真实权限开关、计划规则、角色、工作区或会话引用，没有安装/升级依赖。
+
+独立代码审查核对了新公开边界及旧兼容分支。宿主引擎检查使用includePrerelease:true，现有engines.dsh范围在本机接受0.2.2-rc.1；标准semver默认规则不接受，不能混淆。旧rc5分支保留并有回归，但本轮只对当前安装的0.2.2-rc.1做完整安装版重验，不声称重新运行旧二进制。
+
+首轮曾有一个既有迁移用例在临时文件rename时报EPERM，最终完整421项通过；未修改生产原子写入或放宽测试，不能据此认定是宿主升级导致。全部数据/搜索provider均为合成，真实聊天/账本、账号、模型、脚本和平台写入均未执行。前端字节未变；真实GUI及平台账号读取仍未新增验收。
 
 ## 0.6.5 计划原生只读通道
 

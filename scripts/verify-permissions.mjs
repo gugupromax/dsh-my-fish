@@ -7,18 +7,20 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {Store} from '../lib/store.js';
 import {Permissions} from '../lib/permissions.js';
+import {hostToolsFixture} from './host-tools-fixture.mjs';
 
 const hostRoot=process.argv[2]||'D:/Program Files/DeepSeek Harness/resources/app.asar/dsh/node_modules';
+const toolFixture=await hostToolsFixture(hostRoot);
 const hostImport=name=>import(pathToFileURL(path.join(hostRoot,'@deepseek-ai',name,'lib/index.js')).href);
 const temporaryRoot=fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-guard-host-'));
 const fibers=[],detachAgents=[],disposers=[];
 let passed=false;
 try {
-  const [{Context},{default:SystemPrompt},{ToolRuntime,TOOL_RUNTIME_SCHEDULER},{AgentRegistry}]=await Promise.all([
-    hostImport('cordis'),hostImport('dsh-system-prompt'),hostImport('dsh-tools'),hostImport('dsh-agent'),
+  const [{Context},{SessionProjectionRegistry},{default:SystemPrompt},{ToolRuntime,TOOL_RUNTIME_SCHEDULER},{AgentRegistry}]=await Promise.all([
+    hostImport('cordis'),hostImport('dsh-session-projection'),hostImport('dsh-system-prompt'),hostImport('dsh-tools'),hostImport('dsh-agent'),
   ]);
   const ctx=new Context();
-  for(const [plugin,config] of [[SystemPrompt,{includeHarnessIdentity:false}],[ToolRuntime,{mode:'native'}],[AgentRegistry,{}]]){
+  for(const [plugin,config] of [[SessionProjectionRegistry,{}],[SystemPrompt,{includeHarnessIdentity:false}],...toolFixture.plugins('native'),[AgentRegistry,{}]]){
     const fiber=ctx.plugin(plugin,config);fibers.push(fiber);await fiber;
   }
   const main={id:'synthetic-main',session:{id:'synthetic-main'}},child={id:'synthetic-child',session:{id:'synthetic-child'}},nested={id:'synthetic-nested',session:{id:'synthetic-nested'}},ordinary={id:'synthetic-ordinary',session:{id:'synthetic-ordinary',parentId:main.id}},plan={id:'synthetic-plan',session:{id:'synthetic-plan'}},planChild={id:'synthetic-plan-child',session:{id:'synthetic-plan-child'}};
@@ -34,27 +36,27 @@ try {
   let counter=0;
   const input=(agent,name,arguments_={})=>({agent,name,arguments:arguments_,callId:'synthetic-call-'+(++counter),signal:new AbortController().signal});
   for(const subject of [main,child,nested]){
-    const result=await ctx.tools.execute(input(subject,'pwsh'));
+    const result=await toolFixture.invoke(ctx,input(subject,'pwsh'));
     assert.equal(result.isError,true);assert.match(result.error.message,/本地命令权限/);
   }
   assert.equal(bodies,0,'denied bodies must never start');
-  assert.equal((await ctx.tools.execute(input(ordinary,'pwsh'))).isError,false,'ordinary chat retains its own host policy');
+  assert.equal((await toolFixture.invoke(ctx,input(ordinary,'pwsh'))).isError,false,'ordinary chat retains its own host policy');
   assert.equal(bodies,1);
   permissions.save({privateTerms:['SYNTHETIC PRIVATE TOPIC']});
-  const secret=await ctx.tools.execute(input(nested,'web_search',{query:'synthetic%20private%20topic'}));
+  const secret=await toolFixture.invoke(ctx,input(nested,'web_search',{query:'synthetic%20private%20topic'}));
   assert.equal(secret.isError,true);assert.match(secret.error.message,/私密词/);assert.equal(bodies,1);
-  assert.equal((await ctx.tools.execute(input(nested,'read'))).isError,false);
+  assert.equal((await toolFixture.invoke(ctx,input(nested,'read'))).isError,false);
   assert.ok(outerToken,'obtain a real registry-minted parent execution token');
-  const scheduler=ctx.tools[TOOL_RUNTIME_SCHEDULER];
+  const scheduler=toolFixture.pipeline(ctx);
   const denied=await scheduler.prepare({...input(nested,'pwsh'),parent:outerToken});
   assert.equal(denied.kind,'post-result');assert.equal(denied.result.isError,true);assert.match(denied.result.error.message,/本地命令权限/);
-  await scheduler.finalize(denied.exec,denied.result);
+  await scheduler.complete(denied.exec,denied);
   assert.equal(bodies,2,'PTC-style nested preparation must deny before dispatch');
   permissions.save({shell:true});
   const allowed=await scheduler.prepare({...input(nested,'pwsh'),parent:outerToken});
   assert.equal(allowed.kind,'dispatch');
   const dispatched=await scheduler.dispatch(allowed.exec);
-  const settled=dispatched.kind==='post-result'?await scheduler.finalize(allowed.exec,dispatched.result):await scheduler.finish(allowed.exec,dispatched.result);
+  const settled=await scheduler.complete(allowed.exec,dispatched);
   assert.equal(settled.isError,false);assert.equal(bodies,3);
   permissions.save({shell:false});
   // Exercise the actual runtime guard with no-op definitions only. These
@@ -68,39 +70,39 @@ try {
   };
   const bodyBeforeUtilities=bodies;
   for(const subject of [main,child,nested])for(const [name,args]of Object.entries(utilityArgs)){
-    const result=await ctx.tools.execute(input(subject,name,args));
+    const result=await toolFixture.invoke(ctx,input(subject,name,args));
     assert.equal(result.isError,false,subject.id+' can use '+name+' without machine/browser/delegation permissions');
   }
   assert.equal(bodies,bodyBeforeUtilities+12);
   for(const subject of [plan,planChild]){
-    for(const name of ['compress','session_event_search'])assert.equal((await ctx.tools.execute(input(subject,name,utilityArgs[name]))).isError,false,subject.id+' retains current-context maintenance');
-    assert.equal((await ctx.tools.execute(input(subject,'session_event_search',{...utilityArgs.session_event_search,session_id:subject.session.id}))).isError,false,'explicit current session remains allowed');
+    for(const name of ['compress','session_event_search'])assert.equal((await toolFixture.invoke(ctx,input(subject,name,utilityArgs[name]))).isError,false,subject.id+' retains current-context maintenance');
+    assert.equal((await toolFixture.invoke(ctx,input(subject,'session_event_search',{...utilityArgs.session_event_search,session_id:subject.session.id}))).isError,false,'explicit current session remains allowed');
     const beforeDenials=bodies;
     for(const name of ['ask_user_question','task_board_list']){
-      const result=await ctx.tools.execute(input(subject,name,utilityArgs[name]));
+      const result=await toolFixture.invoke(ctx,input(subject,name,utilityArgs[name]));
       assert.equal(result.isError,true,name+' is explicitly restricted for autonomous plans');
       assert.match(result.error.message,/计划|只读|汇报|会话/);
       assert.doesNotMatch(result.error.message,/尚未纳入/,'known restricted tools have an actionable scope reason');
     }
     for(const target of [main.session.id,child.session.id,ordinary.session.id,'synthetic-another-session',null,17]){
-      const result=await ctx.tools.execute(input(subject,'session_event_search',{...utilityArgs.session_event_search,session_id:target}));
+      const result=await toolFixture.invoke(ctx,input(subject,'session_event_search',{...utilityArgs.session_event_search,session_id:target}));
       assert.equal(result.isError,true,'plan searches may not select another session or malformed target');
       assert.match(result.error.message,/计划|当前|会话/);
     }
     assert.equal(bodies,beforeDenials,'plan restrictions reject before a tool body starts');
   }
-  assert.equal((await ctx.tools.execute(input(main,'session_event_search',{...utilityArgs.session_event_search,session_id:ordinary.session.id}))).isError,false,'personal callers retain the real host authorization boundary; this no-op does not read another chat');
+  assert.equal((await toolFixture.invoke(ctx,input(main,'session_event_search',{...utilityArgs.session_event_search,session_id:ordinary.session.id}))).isError,false,'personal callers retain the real host authorization boundary; this no-op does not read another chat');
   for(const subject of [main,child,nested,plan,planChild]){
     const beforeDenials=bodies;
-    assert.equal((await ctx.tools.execute(input(subject,'write',{path:'synthetic.txt',content:'Synthetic'}))).isError,true);
-    const unknown=await ctx.tools.execute(input(subject,'synthetic_unknown_tool'));
+    assert.equal((await toolFixture.invoke(ctx,input(subject,'write',{path:'synthetic.txt',content:'Synthetic'}))).isError,true);
+    const unknown=await toolFixture.invoke(ctx,input(subject,'synthetic_unknown_tool'));
     assert.equal(unknown.isError,true);assert.match(unknown.error.message,/尚未纳入/);
     assert.equal(bodies,beforeDenials,'classification does not open unknown tools or file writes');
   }
   assert.deepEqual(permissions.policy(),{shell:false,fileWrite:false,browserInteract:false,delegation:false,privateTerms:['SYNTHETIC PRIVATE TOPIC']},'utility classification never toggles saved policy');
   const bodiesBeforeDisposal=bodies;
   await disposeGuard();
-  assert.equal((await ctx.tools.execute(input(nested,'pwsh'))).isError,false,'disposing the exact guard removes only this restriction');
+  assert.equal((await toolFixture.invoke(ctx,input(nested,'pwsh'))).isError,false,'disposing the exact guard removes only this restriction');
   assert.equal(bodies,bodiesBeforeDisposal+1);
   detachAgents[2]();
   assert.equal(ctx.agents.isOwnedBy(nested.id,child),false,'ownership ends when the actual registry entry detaches');

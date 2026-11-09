@@ -5,8 +5,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {hostToolsFixture} from './host-tools-fixture.mjs';
 
 const hostRoot=process.argv[2]||'D:/Program Files/DeepSeek Harness/resources/app.asar/dsh/node_modules';
+const toolFixture=await hostToolsFixture(hostRoot);
 const hostImport=name=>import(pathToFileURL(path.join(hostRoot,'@deepseek-ai',name,'lib/index.js')).href);
 const temporaryRoot=fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-workspace-host-'));
 const original=path.join(temporaryRoot,'original'),selected=path.join(temporaryRoot,'selected'),next=path.join(temporaryRoot,'next');
@@ -25,7 +27,7 @@ try {
     processPath:value=>value,
   });
   ctx.provide('llm',new Proxy({}, {get:()=>()=>{modelCalls++;throw Error('A workspace verifier must never call a model');}}));
-  for(const [plugin,config] of [[SessionStore,{}],[SessionProjectionRegistry,{}],[SystemPrompt,{includeHarnessIdentity:false}],[ToolRuntime,{mode:'native'}],[AgentRegistry,{}],[WorkingDirectoryService,{defaultDirectory:original}],[SandboxPolicy,{mode:'workspace-write',workspaceRoot:original}],[AgentLoop,{agents:[],maxParallelToolCalls:1}]]){
+  for(const [plugin,config] of [[SessionStore,{}],[SessionProjectionRegistry,{}],[SystemPrompt,{includeHarnessIdentity:false}],...toolFixture.plugins('native'),[AgentRegistry,{}],[WorkingDirectoryService,{defaultDirectory:original}],[SandboxPolicy,{mode:'workspace-write',workspaceRoot:original}],[AgentLoop,{agents:[],maxParallelToolCalls:1}]]){
     const fiber=ctx.plugin(plugin,config);fibers.push(fiber);await fiber;
   }
   const sessionId='synthetic-workspace-main';
@@ -36,7 +38,7 @@ try {
     assert.equal(agent.status,'idle');
     await ctx.workingDirectory.set(agent,selected,signal);creationChanges++;
   }));
-  const handle=await ctx.agents.create({sessionId,meta:{cwd:original},agentOptions:{}});handles.push(handle);
+  const handle=await ctx.agents.create({sessionId,meta:{cwd:original},agentOptions:{provider:'synthetic-provider',model:'synthetic-model'}});handles.push(handle);
   const agent=handle.agent;
   assert.equal(creationChanges,1);assert.equal(agent.id,sessionId);assert.equal(agent.session.id,sessionId);
   assert.equal(ctx.workingDirectory.get(agent.session),selected);

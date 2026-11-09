@@ -11,7 +11,7 @@
 | 权限 | 默认 | 范围 |
 | --- | --- | --- |
 | 本机代码/命令/终端 | 关闭 | pwsh/bash/terminal_open/send/run_code |
-| 本地文件写入 | 关闭 | write/edit，宿主仍限制路径 |
+| 本地文件写入 | 关闭 | write/edit/apply_patch，宿主仍限制路径 |
 | 浏览器交互 | 关闭 | bsk_interact/bsk_assist |
 | 委派 | 关闭 | subagent/spawn_teammate/send_message，归属服务不可用拒绝 |
 | X 收藏/回复/公开 @ | 关闭 | 主会话、目标证据、额度、去重和回执 |
@@ -21,6 +21,8 @@
 未分类工具在个人范围拒绝。工具可见、连接、审批由宿主决定，不以 CLI 存在当成可用。
 
 ## 宿主交互与上下文工具
+
+0.6.6适配新版apply_patch：归已有fileWrite开关，默认仍关闭；计划即使主会话开启写入也拒绝。新版公共pipeline保留当步ToolSet、守卫、取消及执行后策略，不通过直接调用工具体绕过权限。
 
 0.6.5另补齐个人范围grep与task_board_get。grep原生实现为固定ripgrep参数读取，但使用unconfined subprocess，源码没有文件根检查，因此不向计划开放；不声称它由宿主限制在工作区内。task_board_get返回完整正文、执行记录及关联子卡，不向计划开放。未知工具拒绝信息附运行版本和规则号，相关元数据在模块加载时固定。
 

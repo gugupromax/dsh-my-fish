@@ -4,32 +4,45 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {createBilibiliAdapter} from '../lib/channels/bilibili.js';
+import {createHostToolInvoker} from '../lib/host-tool-invoke.js';
+import {hostToolsFixture} from './host-tools-fixture.mjs';
 
 const hostRoot=process.argv[2]||'D:/Program Files/DeepSeek Harness/resources/app.asar/dsh/node_modules';
+const toolFixture=await hostToolsFixture(hostRoot);
 const hostImport=name=>import(pathToFileURL(path.join(hostRoot,'@deepseek-ai',name,'lib/index.js')).href);
 const fibers=[],disposers=[],detach=[];
 let passed=false;
 try{
-  const [{Context},{default:SystemPrompt},{ToolRuntime},{AgentRegistry}]=await Promise.all([hostImport('cordis'),hostImport('dsh-system-prompt'),hostImport('dsh-tools'),hostImport('dsh-agent')]);
+  const [{Context},{Loader},{SessionProjectionRegistry},{default:SystemPrompt},{ToolRuntime},{AgentRegistry}]=await Promise.all([hostImport('cordis'),hostImport('cordis-plugin-loader'),hostImport('dsh-session-projection'),hostImport('dsh-system-prompt'),hostImport('dsh-tools'),hostImport('dsh-agent')]);
   const ctx=new Context();
-  for(const [plugin,config] of [[SystemPrompt,{includeHarnessIdentity:false}],[ToolRuntime,{mode:'native'}],[AgentRegistry,{}]]){const fiber=ctx.plugin(plugin,config);fibers.push(fiber);await fiber;}
+  const baseUrl=pathToFileURL(path.join(hostRoot,'..','package.json')).href;ctx.baseUrl=baseUrl;
+  for(const [plugin,config] of [[Loader,{baseUrl}],[SessionProjectionRegistry,{}],[SystemPrompt,{includeHarnessIdentity:false}],...toolFixture.plugins('native'),[AgentRegistry,{}]]){const fiber=ctx.plugin(plugin,config);fibers.push(fiber);await fiber;}
   const main={id:'synthetic-bili-main',session:{id:'synthetic-bili-main'}},child={id:'synthetic-bili-child',session:{id:'synthetic-bili-child'}};
   detach.push(ctx.agents.enter(main));detach.push(ctx.agents.enter(child,main));assert.equal(ctx.agents.isOwnedBy(child.id,main),true);
-  const nestedInputs=[],outerTokens=[],guarded=[];let bodies=0,deny=false;
-  const adapter=createBilibiliAdapter({fetchImpl:()=>{throw Error('No network may run in the host bridge test');},getTools:()=>({get:(name,agent)=>ctx.tools.get(name,agent),execute:input=>{nestedInputs.push(input);return ctx.tools.execute(input);}})});
+  const nestedInputs=[],outerTokens=[],outerExecutions=[],guarded=[];let bodies=0,deny=false,admitted=true;
+  const invoke=createHostToolInvoker(ctx);
+  const adapter=createBilibiliAdapter({fetchImpl:()=>{throw Error('No network may run in the host bridge test');},getTools:()=>ctx.tools,invokeTool:input=>{nestedInputs.push(input);return invoke(input);}});
   const output={schema:{},render:()=>[{type:'text',text:'Synthetic no-op bridge result'}]};
-  disposers.push(ctx.tools.register({name:'web_search',description:'Synthetic no-op public search fixture',parameters:{type:'object',properties:{queries:{type:'array',items:{type:'string'}}},required:['queries'],additionalProperties:false},output,execute:(args,exec)=>{bodies++;assert.deepEqual(args.queries,['site:bilibili.com/video synthetic public topic']);assert.ok(exec.token);return {sources:[{url:'https://www.bilibili.com/video/BV1xx411c7mD/',title:'Synthetic public video',snippet:'Synthetic search excerpt'},{url:'https://invalid.example/video/BV1xx411c7mD/'}],truncated:false};}}));
-  disposers.push(ctx.tools.register({name:'social_search',description:'Synthetic outer channel facade fixture',parameters:{type:'object',properties:{query:{type:'string'}},required:['query'],additionalProperties:false},output,execute:(args,exec)=>{outerTokens.push(exec.token);return adapter.search(args,exec.signal,exec);}}));
+  disposers.push(ctx.tools.register({name:'web_search',description:'Synthetic no-op public search fixture',parameters:{type:'object',properties:{queries:{type:'array',items:{type:'string'}}},required:['queries'],additionalProperties:false},output,execute:(args,exec)=>{bodies++;assert.deepEqual(args.queries,['site:bilibili.com/video synthetic public topic']);assert.ok(exec.token);return {sources:[{url:'https://www.bilibili.com/video/BV1xx411c7mD/',title:'Synthetic public video',snippet:'Synthetic search excerpt'},{url:'https://invalid.example/video/BV1xx411c7mD/'}],truncated:false};}},{when:()=>admitted}));
+  disposers.push(ctx.tools.register({name:'social_search',description:'Synthetic outer channel facade fixture',parameters:{type:'object',properties:{query:{type:'string'}},required:['query'],additionalProperties:false},output,execute:(args,exec)=>{outerTokens.push(exec.token);outerExecutions.push(exec);return adapter.search(args,exec.signal,exec);}}));
   disposers.push(ctx.tools.guard(exec=>{if(exec.name!=='web_search')return;guarded.push(exec.agent);if(deny)return 'Synthetic nested search guard denial';}));
   const input=(agent,callId)=>({name:'social_search',agent,arguments:{query:'synthetic public topic'},callId,signal:new AbortController().signal});
   const initial=adapter.capabilities();assert.equal(initial.currentSessionVisible,null);assert.equal(initial.readAvailability.search.currentSessionVisible,null);assert.equal(initial.connection.state,'unchecked');
   for(const [agent,index] of [[main,1],[child,2]]){
-    const call=input(agent,'synthetic-bili-outer-'+index),result=await ctx.tools.execute(call);
+    const call=input(agent,'synthetic-bili-outer-'+index),result=await toolFixture.invoke(ctx,call);
     assert.equal(result.isError,false);assert.equal(result.value.items.length,1);assert.equal(result.value.items[0].bvid,'BV1xx411c7mD');
     const nested=nestedInputs.at(-1);assert.equal(nested.agent,agent);assert.equal(nested.parent,outerTokens.at(-1));assert.ok(nested.parent,'parent must be a real registry-minted token');assert.equal(nested.rootCallId,call.callId);assert.notEqual(nested.callId,call.callId);assert.equal(guarded.at(-1),agent);
   }
   assert.equal(bodies,2);assert.notEqual(nestedInputs[0].callId,nestedInputs[1].callId);
-  deny=true;const rejected=await ctx.tools.execute(input(main,'synthetic-bili-denied'));
+  if(toolFixture.modern){
+    await assert.rejects(adapter.search({query:'synthetic public topic'},new AbortController().signal,outerExecutions[0]),/真实执行上下文/);
+    assert.equal(bodies,2,'expired caller admission cannot be reused for another nested search');
+    admitted=false;
+    const prior=nestedInputs.length,result=await toolFixture.invoke(ctx,input(main,'synthetic-not-admitted'));
+    assert.equal(result.isError,true);assert.equal(bodies,2);assert.equal(nestedInputs.length,prior,'step-inadmissible search never enters the nested bridge');
+    admitted=true;
+  }
+  deny=true;const rejected=await toolFixture.invoke(ctx,input(main,'synthetic-bili-denied'));
   assert.equal(rejected.isError,true);assert.equal(bodies,2,'nested host guard must deny before the search body');assert.equal(adapter.capabilities().readAvailability.search.connection.state,'failed');
   deny=false;
   await assert.rejects(adapter.search({query:'synthetic public topic'},new AbortController().signal,{agent:main,callId:'synthetic-missing-parent'}),/真实执行上下文/);

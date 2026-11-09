@@ -11,8 +11,10 @@ import {CompanionStore} from '../lib/companion-store.js';
 import {CompanionRuntime} from '../lib/companion-runtime.js';
 import {Scheduler} from '../lib/scheduler.js';
 import {createSessionProbe} from '../lib/session-presence.js';
+import {hostToolsFixture} from './host-tools-fixture.mjs';
 
 const hostRoot=process.argv[2]||'D:/Program Files/DeepSeek Harness/resources/app.asar/dsh/node_modules';
+const toolFixture=await hostToolsFixture(hostRoot);
 const hostImport=name=>import(pathToFileURL(path.join(hostRoot,'@deepseek-ai',name,'lib/index.js')).href);
 const temporaryParent=fs.realpathSync.native(os.tmpdir());
 const temporaryRoot=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-session-binding-host-')));
@@ -43,6 +45,7 @@ try{
     bindPrompt:()=>({commit(){},[Symbol.dispose](){}}),
   });
   ctx.provide('remoteAccess',{allows:()=>true});
+  ctx.provide('typertGateway',{getPendingRemoteEvents:()=>[]});
   ctx.provide('typert',{
     resources:{register:()=>()=>{}},
     lookups:{register:()=>()=>{},configure:()=>()=>{}},
@@ -50,7 +53,7 @@ try{
   });
   for(const [plugin,config] of [
     [Storage,{}],[jsonStorage,{root:path.join(temporaryRoot,'storage')}],[domainStorage,{backend:'json'}],
-    [SessionStore,{}],[SessionProjectionRegistry,{}],[SystemPrompt,{includeHarnessIdentity:false}],[ToolRuntime,{mode:'native'}],[AgentRegistry,{}],
+    [SessionStore,{}],[SessionProjectionRegistry,{}],[SystemPrompt,{includeHarnessIdentity:false}],...toolFixture.plugins('native'),[AgentRegistry,{}],
     [jsonPersistence,{root:path.join(temporaryRoot,'logs'),compression:'none'}],[SessionQueryEngine,{}],[WorkspaceRegistry,{}],
     [WorkingDirectoryService,{defaultDirectory:selected}],[AgentLoop,{agents:[],maxParallelToolCalls:1}],[SessionController,{nativeOpen:false}],
   ]){const fiber=ctx.plugin(plugin,config);fibers.push(fiber);await fiber;}

@@ -162,3 +162,12 @@ test('Bilibili host failures and malformed search values cannot be mistaken for 
     const adapter=createBilibiliAdapter({getTools:()=>({get:()=>({}),execute:async()=>result})});await assert.rejects(adapter.search({query:'合成主题'},undefined,context()),/执行失败|结构化sources/);assert.equal(adapter.capabilities().connection.state,'failed');
   }
 });
+test('capability facades honor the current step admission instead of registered tool presence',()=>{
+  const calls=[],toolSet={allowed:new Set(['social_read'])},exec={agent:{id:'synthetic-admission-agent'},toolSet};
+  const adapter=createBilibiliAdapter({getTools:()=>({get:(name,agent,selection)=>{calls.push({name,agent,selection});return selection?.allowed.has(name)?{}:undefined;},execute:async()=>{throw Error('metadata must not execute a search');}})});
+  const view=adapter.capabilities(exec);
+  assert.equal(view.readAvailability.read.currentSessionVisible,true);
+  assert.equal(view.readAvailability.comments.currentSessionVisible,false);
+  assert.equal(view.readAvailability.search.available,false);
+  assert.ok(calls.every(call=>call.agent===exec.agent&&call.selection===toolSet));
+});

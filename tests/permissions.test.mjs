@@ -37,6 +37,16 @@ test('permission snapshots identify the loaded code version using public package
   assert.equal(typeof value.runtime.permissionRevision,'string');
   assert.deepEqual(value,JSON.parse(JSON.stringify(value)));
 });
+
+test('new host apply_patch follows file-write opt-in while plans retain their read-only boundary',t=>{
+  const {store}=fixture(t),main=agent('main'),plan=agent('plan');
+  const policy=new Permissions(store,{isPlanSession:exec=>exec.agent===plan});
+  assert.match(policy.guard(call('apply_patch',{input:'Synthetic patch'},main)),/文件写入权限/);
+  assert.equal(policy.policy().fileWrite,false);
+  policy.save({fileWrite:true});
+  assert.equal(policy.guard(call('apply_patch',{input:'Synthetic patch'},main)),undefined);
+  assert.match(policy.guard(call('apply_patch',{input:'Synthetic patch'},plan)),/只读/);
+});
 test('outbound review rejects secrets, encoded private phrases and local paths without echoing secret values',t=>{
   const {policy}=fixture(t);policy.save({privateTerms:['SYNTHETIC PRIVATE PHRASE']});
   for(const value of ['auth_token=synthetic-secret-value','https://example.test/?api_key=synthetic-secret-value','https://someone:synthetic-secret-value@example.test','SYNTHETIC%2520PRIVATE%2520PHRASE','E:\\example\\file.txt']){

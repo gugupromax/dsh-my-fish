@@ -1,6 +1,8 @@
 # My Fish 开发交接
 
-当前 **0.6.5 开发预览版**。产品 My Fish，包和模块 dsh-my-fish。计划使用专用原生只读预设，启动修复普通旧计划后续工具通道；脚本执行仍禁止。补齐个人grep/task_board_get，增加加载版本诊断。原计划、陪伴、人设、记忆、作息、权限和旧聊天保留。QQ未部署，B站仍只读简介/资料与有限评论。
+当前 **0.6.6 开发预览版**。产品 My Fish，包和模块 dsh-my-fish。适配DSH0.2.2-rc.1的执行器/批量调用及当步工具准入，修复B站宿主搜索桥接；看板0.4.16和固定会话等接口已重验。原计划、人设、记忆、权限和旧聊天保留。QQ未部署，B站仍只读简介/资料与有限评论。
+
+2026-11-09：实际宿主0.2.2-rc.1、看板0.4.16；421项Node回归与全部10个安装版隔离脚本通过。旧tools.mode配置、modeFor和内部scheduler已从新版移除，验证脚本改用实际executor与公开pipeline；生产计划的旧presentation插件仍为兼容包装，当前可用。B站新增host-tool-invoke，经Loader公开导入pipeline，保留取消/来源/准入和守卫，旧宿主单调用分支保留。apply_patch归fileWrite开关，计划仍拒绝，未改用户配置。
 
 2026-10-30本机宿主已升级0.2.1-rc.5；原有全部安装版隔离验证及399项Node回归重跑通过，未发现需要改运行时代码的兼容问题。包的既有DSH版本范围已包含rc5，不更改依赖、权限、个人数据或会话。公开prompt签名仍是(request,signal)，不能把内部命令层source参数误认为破坏性变更；详细证据见VALIDATION.md与docs/HOST_INTEGRATION.md。
 
@@ -8,6 +10,7 @@
 
 ## 本版变化
 
+- 0.2.2嵌套宿主调用使用完整公开pipeline；不能用批量execute替代nested调用，因为batch不会带入parent/rootCallId。toolSet同时用于可见性和调用，已验证当前未准入与调用后过期均不发起搜索。新旧执行边界按实际能力区分，不硬编码宿主安装路径或直接调用工具体。
 - 计划固定dsh-my-fish-plan-native，显式native展示，不再继承全局PTC。agentPresets注册/解析成功后才创建；预设只读模块及公共restrict掩码保留原生读取和报告，隐藏已知个人/写工具。真实模型可见工具列表与真实Tools调用均有隔离验证，不只直调execute。
 - agentPresets/taskBoard连接后，使用公开update只改普通旧计划mode；旧会话与执行记录保留、时间正文权限不变。repair_runtime可在主会话核对修复；已开始的旧PTC轮次不换通道不补跑。续接/交接、父子任务、权限或执行方式改变的计划明确blocked，避免宿主更高优先级预设覆盖或清除资料。
 - grep/task_board_get在主会话和真实个人子孙可用；计划拒绝两者。公开runtime版本与规则号在模块加载时固定，可用assistant_capabilities或可信permissions接口核对；未知工具错误也附运行版本，区分旧轮次/旧加载与当前规则。

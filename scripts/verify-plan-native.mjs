@@ -1,4 +1,4 @@
-// Installed rc5 preset, prompt assembly and ToolRuntime; synthetic data only.
+// Installed preset, prompt assembly and ToolRuntime; synthetic data only.
 // No model, real schedule, network, user history, account or PTC program runs.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -10,13 +10,15 @@ import {Store} from '../lib/store.js';
 import {Permissions} from '../lib/permissions.js';
 import {Engine} from '../lib/engine.js';
 import {registerPlanPreset, PLAN_PRESET_ID} from '../lib/plan-runtime.js';
+import {hostToolsFixture} from './host-tools-fixture.mjs';
 
 const hostRoot=process.argv[2]||'D:/Program Files/DeepSeek Harness/resources/app.asar/dsh/node_modules';
+const toolFixture=await hostToolsFixture(hostRoot);
 const hostImport=name=>import(pathToFileURL(path.join(hostRoot,'@deepseek-ai',name,'lib/index.js')).href);
 const temporaryParent=fs.realpathSync.native(os.tmpdir());
 const temporaryRoot=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-plan-native-')));
 const previousHome=process.env.DSH_HOME,previousFetch=globalThis.fetch,originalEngineRead=Engine.prototype.read;
-const fibers=[],scopes=[],disposers=[];
+const fibers=[],scopes=[],disposers=[],selections=new Map();
 let runtime,passed=false,modelCalls=0,networkCalls=0,scriptBodies=0,statusBodies=0,xSearchBodies=0,fileReads=0,webReads=0;
 process.env.DSH_HOME=temporaryRoot;
 globalThis.fetch=()=>{networkCalls++;throw Error('No network access allowed');};
@@ -45,6 +47,7 @@ try {
   ctx.provide('workingDirectory',{ensure:async()=>temporaryRoot,get:()=>temporaryRoot});
   ctx.provide('attachments',{imageLimits:{maxImageBytes:1024,maxImagesPerMessage:1,maxMessageImageBytes:1024,maxImagePixels:1,maxImageDimension:1,mediaTypes:[]}});
   ctx.provide('web',{
+    searchReady:()=>true,fetchReady:()=>true,
     search:async({query},signal)=>{signal.throwIfAborted();assert.equal(query,'Synthetic public source');webReads++;return {content:'SYNTHETIC_NATIVE_SEARCH_CONTENT',sources:[{url:'https://example.com/synthetic',title:'Synthetic public source'}],truncated:false};},
     fetch:()=>{throw Error('No actual fetch is permitted');},
   });
@@ -53,7 +56,7 @@ try {
   });
   const baseUrl=pathToFileURL(path.join(hostRoot,'..','package.json')).href;
   ctx.baseUrl=baseUrl;
-  for(const [implementation,config]of [[Loader,{baseUrl}],[SessionProjectionRegistry,{}],[SystemPrompt,{includeHarnessIdentity:false}],[ToolRuntime,{mode:'ptc'}],[AgentRegistry,{}],[AgentPresetRegistry,{default:'synthetic-default-ptc'}]]){
+  for(const [implementation,config]of [[Loader,{baseUrl}],[SessionProjectionRegistry,{}],[SystemPrompt,{includeHarnessIdentity:false}],...toolFixture.plugins('ptc'),[AgentRegistry,{}],[AgentPresetRegistry,{default:'synthetic-default-ptc'}]]){
     const fiber=ctx.plugin(implementation,config);fibers.push(fiber);await fiber;
   }
   const main={id:'synthetic-native-main',session:{id:'synthetic-native-main',header:{cwd:temporaryRoot}}};
@@ -84,19 +87,23 @@ try {
   assert.equal(resolvedPreset.broken,undefined,'The real owned preset must mount: '+(resolvedPreset.broken??''));
   assert.equal(await runtime.ensureReady(),PLAN_PRESET_ID);
   assert.equal((await ctx.agentPresets.resolve(PLAN_PRESET_ID)).broken,undefined);
-  const assemble=agent=>ctx.systemPrompt.assemble({agent,scope:agent,signal});
+  const assemble=async agent=>{
+    selections.get(agent)?.dispose();
+    const toolSet=await toolFixture.resolve(ctx,agent,signal);selections.set(agent,toolSet);
+    return ctx.systemPrompt.assemble({agent,scope:agent,signal,...(toolSet===undefined?{}:{toolSet})});
+  };
   const oldSurface=await assemble(legacy);
   assert.deepEqual(oldSurface.tools.map(tool=>tool.name),['run_code'],'The global PTC presentation reproduces the unusable channel');
   const policy=new Permissions(store);
   policy.save({shell:true});
   let callNumber=0;
-  const execute=(agent,name,arguments_)=>ctx.tools.execute({agent,name,arguments:arguments_,callId:'synthetic-native-call-'+(++callNumber),signal});
+  const execute=(agent,name,arguments_)=>toolFixture.invoke(ctx,{agent,name,arguments:arguments_,callId:'synthetic-native-call-'+(++callNumber),signal,...(selections.get(agent)===undefined?{}:{toolSet:selections.get(agent)})});
   const deniedProgram=await execute(legacy,'run_code',{code:''});
   assert.equal(deniedProgram.isError,true);assert.match(deniedProgram.error.message,/只读执行/);
   assert.equal(scriptBodies,0,'Even an empty PTC program is rejected before its body');
   await ctx.agentPresets.mount(worker.ctx,task.mode);
   assert.equal(ctx.agentPresets.composedPreset(worker.ctx),PLAN_PRESET_ID);
-  assert.equal(ctx.tools.modeFor(worker),'native');assert.equal(ctx.tools.modeFor(legacy),'ptc','The host default is unchanged');
+  assert.equal(toolFixture.presentation(ctx,worker),'native');assert.equal(toolFixture.presentation(ctx,legacy),'ptc','The host default is unchanged');
   const nativeSurface=await assemble(worker),nativeNames=nativeSurface.tools.map(tool=>tool.name);
   for(const name of ['x_whale_status','x_whale_search','assistant_plan_report','read','web_search','web_fetch'])assert.ok(nativeNames.includes(name),'Native schema is model-visible: '+name);
   assert.ok(!nativeNames.includes('run_code'),'The native model-facing surface has no PTC executor');
@@ -108,9 +115,9 @@ try {
   const xSearch=await execute(worker,'x_whale_search',{query:'Synthetic X read',count:1});
   assert.equal(xSearch.isError,false);assert.equal(xSearchBodies,1);assert.equal(JSON.parse(xSearch.content[0].text).items[0].text,'SYNTHETIC_NATIVE_X_SEARCH_CONTENT');
   const read=await execute(worker,'read',{file_path:'synthetic-source.txt'});
-  assert.equal(read.isError,false);assert.ok(read.content.some(part=>part.type==='text'&&part.text.includes('SYNTHETIC_NATIVE_READ_CONTENT')));assert.equal(fileReads,1);
+  assert.equal(read.isError,false,read.error?.message);assert.ok(read.content.some(part=>part.type==='text'&&part.text.includes('SYNTHETIC_NATIVE_READ_CONTENT')));assert.equal(fileReads,1);
   const search=await execute(worker,'web_search',{queries:['Synthetic public source']});
-  assert.equal(search.isError,false);assert.ok(search.content.some(part=>part.type==='text'&&part.text.includes('SYNTHETIC_NATIVE_SEARCH_CONTENT')));assert.equal(webReads,1);
+  assert.equal(search.isError,false,search.error?.message);assert.ok(search.content.some(part=>part.type==='text'&&part.text.includes('SYNTHETIC_NATIVE_SEARCH_CONTENT')));assert.equal(webReads,1);
   const report=await execute(worker,'assistant_plan_report',{id:task.id,notify:false,summary:'Synthetic native status, file and public-source reads completed.'});
   assert.equal(report.isError,false);assert.equal(JSON.parse(report.content[0].text).ok,true);assert.equal(store.state().planReports[0].executionId,'synthetic-native-execution');
   const noExecutor=await execute(worker,'run_code',{code:''});assert.equal(noExecutor.isError,true);assert.equal(scriptBodies,0);
@@ -119,6 +126,7 @@ try {
   assert.equal(modelCalls,0);assert.equal(networkCalls,0);
   passed=true;
 } finally {
+  for(const selection of selections.values())selection?.dispose();
   for(const dispose of disposers.reverse())await dispose();
   for(const scope of scopes.reverse())await scope.dispose();
   if(runtime)await runtime.dispose();
