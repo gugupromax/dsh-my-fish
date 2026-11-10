@@ -34,16 +34,28 @@ try{
   const permissions=new Permissions(store,{isPlanSession:exec=>exec.agent===agent});
   disposers.push(ctx.tools.register({name:'pwsh',description:'Synthetic blocked tool',parameters:{type:'object',properties:{},additionalProperties:true},output:{schema:{},render:()=>[{type:'text',text:'Synthetic'}]},execute:()=>{toolBodies++;throw Error('Tool body must never run');}}));
   disposers.push(ctx.tools.guard(exec=>repeat.record(exec,permissions.guard(exec))));
-  disposers.push(ctx.on('agent/pre-step',async event=>{
-    if(event.agent!==agent)return;
-    preSteps++;
-    for(const callId of ['synthetic-one','synthetic-two']){
+  let testDenials=false,continued=0;
+  disposers.push(ctx.on('agent/pre-step',async (event,next)=>{
+    if(testDenials&&event.agent===agent){
+      preSteps++;
+      for(const callId of ['synthetic-one','synthetic-two']){
       const result=await fixture.invoke(ctx,{agent,name:'pwsh',arguments:{},callId,signal});
       assert.equal(result.isError,true);
+      }
     }
-    return repeat.preStep(event);
+    return repeat.preStep(event)??next();
   },{global:true}));
   disposers.push(ctx.on('session/event',(session,event)=>repeat.observe(session,event),{global:true}));
+  // Reach the host's actual default enter decision, then stop before any model
+  // call. Both an unrelated chat and an unblocked owned plan must continue.
+  const stopBeforeModel=ctx.on('agent/pre-step',async (_event,next)=>{
+    const decision=await next();assert.equal(decision.kind,'enter');assert.ok(Array.isArray(decision.messages));continued++;
+    return {kind:'reject',reason:'Synthetic test stops before model'};
+  },{global:true});disposers.push(stopBeforeModel);
+  const ordinary=await ctx.agents.create({sessionId:'synthetic-unrelated-session',meta:{cwd:temp},agentOptions:{provider:'synthetic-provider',model:'synthetic-model'}});handles.push(ordinary);
+  for(const current of [ordinary.agent,agent]){current.followup({content:[{type:'text',text:'Synthetic unblocked chat'}],source:{kind:'user'}});await current.whenIdle();}
+  assert.equal(continued,2);assert.equal(notices.length,0);assert.equal(modelCalls,0);
+  stopBeforeModel();testDenials=true;
   agent.followup({content:[{type:'text',text:'Synthetic plan run'}],source:{kind:'user'}});
   await agent.whenIdle();
   const events=agent.session.snapshotEvents(),ending=events.find(event=>event.type==='turn/end');
@@ -83,4 +95,4 @@ try{
   const relative=path.relative(path.resolve(os.tmpdir()),path.resolve(temp));assert.ok(relative&&!relative.startsWith('..')&&!path.isAbsolute(relative));
   fs.rmSync(temp,{recursive:true,force:true});
 }
-if(passed)console.log(JSON.stringify({repeatDenialRealAgent:'passed',blockedTurn:'passed',boardInspect:'failed-as-expected',boardSettlementTransition:'failed-as-expected',scheduleUnchanged:true,notices:1,toolBodies,modelCalls,realLedgerReads:0,scope:'Synthetic guard calls inside pre-step; installed AgentLoop, board runner inspect via synthetic gateway, and pure board settlement; no live board service, plan or model'}));
+if(passed)console.log(JSON.stringify({repeatDenialRealAgent:'passed',unblockedPlanContinuation:'passed',unrelatedChatContinuation:'passed',blockedTurn:'passed',boardInspect:'failed-as-expected',boardSettlementTransition:'failed-as-expected',scheduleUnchanged:true,notices:1,toolBodies,modelCalls,realLedgerReads:0,scope:'Synthetic guard calls inside pre-step; installed AgentLoop, board runner inspect via synthetic gateway, and pure board settlement; no live board service, plan or model'}));

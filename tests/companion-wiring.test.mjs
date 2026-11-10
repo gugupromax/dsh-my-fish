@@ -33,8 +33,19 @@ function fixture(t,{fetchImpl}={}){
     const res={statusCode:0,setHeader(){},end(text){this.body=JSON.parse(text);}};await routes.get(prefix)(req,res);return {status:res.statusCode,body:res.body};
   }
   const run=(args,agent=main)=>tools.get('assistant_companion').execute(args,{agent,signal:new AbortController().signal});
-  return {store,companion,tools,requests,main,outside,emit,http,run,guards};
+  return {store,companion,tools,requests,main,outside,emit,http,run,guards,listeners};
 }
+
+test('global pre-step guard preserves the downstream decision for main and unrelated conversations',async t=>{
+  const f=fixture(t),handlers=f.listeners.get('agent/pre-step');assert.equal(handlers.length,1);
+  for(const agent of [f.main,f.outside]){
+    const decision={kind:'enter',messages:[{content:'synthetic'}]};let calls=0;
+    const result=await handlers[0]({agent},async()=>{calls++;return decision;});
+    assert.equal(result,decision);assert.equal(calls,1);
+    const failure=Error('synthetic downstream failure');
+    await assert.rejects(async()=>handlers[0]({agent},async()=>{throw failure;}),error=>error===failure);
+  }
+});
 
 test('trusted settings cancel only the current main-session game and restore guarded tools',async t=>{
   const f=fixture(t),execute=args=>f.tools.get('assistant_guess').execute(args,{agent:f.main,signal:new AbortController().signal});
