@@ -7,6 +7,7 @@ import {pathToFileURL} from 'node:url';
 import plugin from '../lib/index.js';
 import {Store} from '../lib/store.js';
 import {CompanionStore} from '../lib/companion-store.js';
+import {GuessGame} from '../lib/guess-game.js';
 
 const hostRoot=process.argv[2]||'D:/Program Files/DeepSeek Harness/resources/app.asar/dsh/node_modules';
 const hostImport=name=>import(pathToFileURL(path.join(hostRoot,'@deepseek-ai',name,'lib/index.js')).href);
@@ -37,7 +38,7 @@ try{
   await new Promise(resolve=>setImmediate(resolve));
   const store=new Store(),companion=new CompanionStore(store),mainId='synthetic-companion-main';
   store.saveState({...store.state(),sessionId:mainId});
-  assert.equal(definitions.length,23);assert.ok(definitions.some(item=>item.name==='assistant_companion'));
+  assert.equal(definitions.length,25);for(const name of ['assistant_companion','assistant_guess','assistant_joke'])assert.ok(definitions.some(item=>item.name===name));
   assert.ok(routes.some(item=>item.path==='/my-fish/api'));
 
   let main,ordinary;
@@ -71,9 +72,20 @@ try{
   // Replaying the same immutable event is idempotent. No history is scanned.
   ctx.emit('session/event',main,live.event);
   assert.equal(companion.snapshot().recentUserMessages.length,1);
+  // Exercise the actual committed assistant event, not a guessed payload.
+  const game=new GuessGame(store,companion),round=game.start({reference:'BV1GJ411x7h7'},mainId);
+  const receipt=companion.addReceipt({platform:'bilibili',operation:'read',reference:'BV1GJ411x7h7',url:'https://www.bilibili.com/video/BV1GJ411x7h7/',title:'Synthetic title',excerpt:'Synthetic description',scope:'Synthetic metadata',sessionId:mainId});
+  game.bet({id:round.id,revision:round.revision,guess:'Synthetic visible guess',receiptId:receipt.id},mainId);
+  const guessed=createAssistantMessage({content:[{type:'text',text:'Synthetic visible guess'}],source:{provider:'synthetic',model:'synthetic'}});
+  assert.equal(guessed.source.kind,'model');
+  main.append('assistant/message',{turn:2,step:1,message:guessed},{surfaceOp:'append'});
+  const shown=game.list(mainId)[0];assert.equal(shown.status,'waiting');assert.ok(Number.isSafeInteger(shown.shownAt));
+  const answer=append(main,'Synthetic later guess',{kind:'user',rpcId:'synthetic-guess-answer'});
+  assert.equal(game.answer({id:shown.id,revision:shown.revision,messageId:answer.message.id,quote:'Synthetic later guess'},mainId).status,'ready');
+  const countBeforeDispose=companion.snapshot().recentUserMessages.length;
   await personalFiber.dispose();
   append(main,'Synthetic after plugin disposal',{kind:'user',rpcId:'synthetic-disposed-rpc'});
-  assert.equal(companion.snapshot().recentUserMessages.length,1);
+  assert.equal(companion.snapshot().recentUserMessages.length,countBeforeDispose);
   assert.equal(modelCalls,0);
   passed=true;
 }finally{

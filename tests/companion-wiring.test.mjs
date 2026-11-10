@@ -11,14 +11,14 @@ import {CompanionStore} from '../lib/companion-store.js';
 function fixture(t,{fetchImpl}={}){
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-companion-wiring-')),previous=process.env.DSH_HOME;process.env.DSH_HOME=home;
   const store=new Store();store.saveState({...store.state(),sessionId:'synthetic-main'});
-  const companion=new CompanionStore(store),tools=new Map(),routes=new Map(),listeners=new Map(),effects=[],requests=[];
+  const companion=new CompanionStore(store),tools=new Map(),routes=new Map(),listeners=new Map(),effects=[],requests=[],guards=[];
   const main={id:'synthetic-main-agent',session:{id:'synthetic-main'},status:'idle'},outside={id:'synthetic-outside',session:{id:'synthetic-outside'}};
   const services={sessions:{get:id=>({id})},agents:{list:()=>[main,outside],isOwnedBy:()=>false}};
   const emit=(name,...args)=>{for(const handler of listeners.get(name)||[])handler(...args);};
   const ctx={
     sessionController:{create:async()=>{throw Error('Should reuse the main conversation');},prompt:async request=>{requests.push(request);emit('session/event',main.session,{type:'user/message',time:Date.now(),data:{id:'program-'+requests.length,source:{kind:'user',rpcId:request.requestId},content:request.content}});}},
     connection:{requestRejection:()=>undefined},logger:{warn:()=>{}},
-    tools:{register:definition=>{tools.set(definition.name,definition);return ()=>tools.delete(definition.name);},guard:()=>()=>{}},
+    tools:{register:definition=>{tools.set(definition.name,definition);return ()=>tools.delete(definition.name);},guard:fn=>{guards.push(fn);return ()=>{};}},
     webServer:{register:row=>{routes.set(row.path,row.handler);return ()=>routes.delete(row.path);}},
     on:(name,handler)=>{if(!listeners.has(name))listeners.set(name,[]);listeners.get(name).push(handler);return ()=>listeners.set(name,listeners.get(name).filter(value=>value!==handler));},
     inject:(names,callback)=>{if(names.every(name=>services[name]))callback({...Object.fromEntries(names.map(name=>[name,services[name]])),effect:fn=>{const dispose=fn();if(typeof dispose==='function')effects.push(dispose);}});},
@@ -33,11 +33,27 @@ function fixture(t,{fetchImpl}={}){
     const res={statusCode:0,setHeader(){},end(text){this.body=JSON.parse(text);}};await routes.get(prefix)(req,res);return {status:res.statusCode,body:res.body};
   }
   const run=(args,agent=main)=>tools.get('assistant_companion').execute(args,{agent,signal:new AbortController().signal});
-  return {store,companion,tools,requests,main,outside,emit,http,run};
+  return {store,companion,tools,requests,main,outside,emit,http,run,guards};
 }
 
+test('trusted settings cancel only the current main-session game and restore guarded tools',async t=>{
+  const f=fixture(t),execute=args=>f.tools.get('assistant_guess').execute(args,{agent:f.main,signal:new AbortController().signal});
+  const before=structuredClone(f.store.state());
+  const {round}=await execute({action:'start',reference:'BV1GJ411x7h7'});
+  assert.match(f.guards[0]({agent:f.main,name:'web_search',arguments:{}}),/猜评论/);
+  assert.equal((await f.http('/my-fish/api','POST','companion/guess-cancel',{}, {origin:'https://outside.invalid'})).status,403);
+  assert.equal((await f.http('/my-fish/api','POST','companion/guess-cancel',{id:round.id})).status,400);
+  const cancelled=await f.http('/my-fish/api','POST','companion/guess-cancel',{});
+  assert.equal(cancelled.status,200);assert.equal(cancelled.body.cancelled,true);
+  assert.equal(f.guards[0]({agent:f.main,name:'web_search',arguments:{}}),undefined);
+  assert.equal((await execute({action:'list'})).rounds[0].status,'cancelled');
+  assert.deepEqual(f.store.state(),before);assert.equal(f.requests.length,0);
+  const empty=await f.http('/x-whale/api','POST','companion/guess-cancel',{});
+  assert.equal(empty.body.cancelled,false);assert.match(empty.body.note,/没有进行中/);
+});
+
 test('companion routes are trusted aliases and reading the empty layer creates no role or false interests',async t=>{
-  const f=fixture(t);assert.equal(f.tools.size,23);assert.equal(fs.existsSync(f.companion.file()),false);
+  const f=fixture(t);assert.equal(f.tools.size,25);assert.equal(f.tools.has('assistant_guess'),true);assert.equal(f.tools.has('assistant_joke'),true);assert.equal(fs.existsSync(f.companion.file()),false);
   for(const prefix of ['/my-fish/api','/x-whale/api']){
     const value=await f.http(prefix,'GET','companion');assert.equal(value.status,200);assert.deepEqual(value.body.threads,[]);assert.equal(fs.existsSync(f.companion.file()),false);
     assert.equal((await f.http(prefix,'GET','companion',undefined,{origin:'https://outside.invalid'})).status,403);

@@ -65,6 +65,7 @@ function harness(options={}){
     }
     else if(route==='config')server.remote.config=body;
     else if(route==='companion/chat'){const result=options.companionResult||{ok:true,queued:true,sessionId:server.remote.sessionId||'companion-main',requestId:body.requestId,note:'已交给同一主会话；真实读取尚未完成'};if(typeof result.sessionId==='string')server.remote.sessionId=result.sessionId;return {ok:true,json:async()=>structuredClone(result)};}
+    else if(route==='companion/guess-cancel')return {ok:true,json:async()=>options.guessCancelResult||{ok:true,cancelled:false,note:'当前没有进行中的猜评论。'}};
     else if(route==='companion/topic')server.companion.threads=server.companion.threads.map(row=>row.id===body.id?{...row,status:body.status}:row);
     else if(route==='companion/forget')server.companion.threads=server.companion.threads.filter(row=>row.id!==body.id);
     else if(route==='credentials')server.remote.hasCredentials=true;
@@ -288,6 +289,15 @@ test('Bilibili companion input normalizes only strict video references and never
   for(const input of ['https://b23.tv/short','https://example.com/video/BV1GJ411x7h7/','http://www.bilibili.com/video/BV1GJ411x7h7/','https://user:password@www.bilibili.com/video/BV1GJ411x7h7/','https://www.bilibili.com:444/video/BV1GJ411x7h7/','BV2GJ411x7h7','https://www.bilibili.com/video/BV1GJ411x7h7/extra']){
     const ui=harness();ui.change('想一起聊的B站链接',input);await ui.click('聊这个');assert.equal(ui.requests.some(row=>row.route==='companion/chat'),false,input);assert.equal(ui.getModel().companionReference,input);assert.match(flatten(ui.render()),/只接受|请填写/);
   }
+});
+
+test('guess-game cancellation uses the local settings request and displays its result',async()=>{
+  const ui=harness();await ui.click('取消当前猜评论');
+  const request=ui.requests.find(row=>row.route==='companion/guess-cancel');
+  assert.equal(request.method,'POST');assert.deepEqual(request.body,{});
+  assert.match(flatten(ui.render()),/当前没有进行中的猜评论/);
+  const active=harness({guessCancelResult:{ok:true,cancelled:true,note:'已取消当前猜评论。'}});
+  await active.click('取消当前猜评论');assert.match(flatten(active.render()),/已取消当前猜评论/);
 });
 
 test('unknown companion outcomes retry with the same request key and leave the reference draft intact',async()=>{

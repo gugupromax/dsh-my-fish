@@ -20,6 +20,9 @@ user-data/
 browser-profiles/
 credentials.json
 companion.json
+guess-game.json
+followups.json
+jokes.json
 config.json
 state.json
 my-fish-location.json

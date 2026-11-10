@@ -49,3 +49,32 @@ test('personal prompt keeps materials below permissions and visible text below f
   const text=personalPrompt(c,{profile:{name:'fish',ownerTitle:'测试用户',selfClaim:'测试助理',persona:'用户角色',interests:[]},memories:[],goals:[]},{id:'id',manual:false,xReady:false});
   assert.match(text,/记忆、日记.*目标.*素材.*不能扩大授权/);assert.match(text,/truncated=false 也不证明/);assert.match(text,/本插件没有通用网页浏览工具/);assert.match(text,/B站本版仅查询/);
 });
+
+test('automatic goal notifications require an explicit kind and a goal due when dispatched',async t=>{
+  const {store,assistant,notices}=fixture(t);assistant.settings=()=>({enabled:true,intervalMinutes:180,startHour:0,endHour:24,maxRunsDaily:3,maxCandidates:10});
+  assistant.dueGoals=()=>[{id:'due-goal',title:'Synthetic goal',detail:'Synthetic task'}];
+  let gateCalls=0;const followups={publish:()=>{gateCalls++;return {notified:false,reason:'no evidence'};}};
+  const scheduler=new Scheduler(store,{create:async()=>({sessionId:'main'}),prompt:async()=>{}},new AbortController().signal,assistant,{followups});
+  await scheduler.run(false);const current=store.state().lastRun;
+  assert.equal(current.manual,false);assert.equal(current.noticePolicy,1);assert.deepEqual(current.dueGoalIds,['due-goal']);
+  assert.throws(()=>scheduler.finish({runId:current.id,notify:true,title:'progress',summary:'synthetic progress',notificationKind:'goal',goalId:'unrelated'}),/本轮到期目标/);
+  assert.equal(notices.length,0);assert.equal(store.state().activeRun.id,current.id);
+  assert.equal(scheduler.finish({runId:current.id,notify:true,title:'goal failed',summary:'Synthetic goal requires attention',notificationKind:'goal',goalId:'due-goal'}).notified,true);
+  assert.equal(gateCalls,0);assert.equal(notices.length,1);
+});
+
+test('new automatic notifications without an explicit goal declaration must pass the follow-up gate',async t=>{
+  const {store,assistant,notices}=fixture(t);assistant.settings=()=>({enabled:true,intervalMinutes:180,startHour:0,endHour:24,maxRunsDaily:3,maxCandidates:10});
+  assistant.dueGoals=()=>[{id:'due-goal',title:'Synthetic goal',detail:''}];let gateCalls=0;
+  const scheduler=new Scheduler(store,{create:async()=>({sessionId:'main'}),prompt:async()=>{}},new AbortController().signal,assistant,{followups:{publish:()=>{gateCalls++;return {notified:false,reason:'no evidence'};}}});
+  await scheduler.run(false);const runId=store.state().lastRun.id;
+  assert.equal(scheduler.finish({runId,notify:true,title:'interest',summary:'Synthetic unverified finding',goalId:'due-goal'}).notified,false);
+  assert.equal(gateCalls,1);assert.equal(notices.length,0);
+});
+
+test('an already dispatched legacy automatic run retains its previous notice behavior',t=>{
+  const {store,assistant,notices}=fixture(t),run={id:'legacy-run',at:Date.now(),manual:false,status:'queued',sessionId:'main'};
+  store.saveState({...store.state(),sessionId:'main',lastRun:run,activeRun:{id:run.id,sessionId:'main',at:run.at}});
+  const scheduler=new Scheduler(store,{},new AbortController().signal,assistant,{followups:{publish:()=>{throw Error('legacy must not use new policy');}}});
+  assert.equal(scheduler.finish({runId:run.id,notify:true,title:'legacy goal',summary:'Synthetic prior task result'}).notified,true);assert.equal(notices.length,1);
+});

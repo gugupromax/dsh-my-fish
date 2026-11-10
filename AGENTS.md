@@ -1,6 +1,6 @@
 # My Fish 项目规则
 
-先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.6.6 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
+先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.7.0 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
 
 - 产品 My Fish，包/Cordis/前端模块 dsh-my-fish，主 API /my-fish/api。旧 X 工具和旧路由只作升级兼容。
 - 渠道通过适配器注册，不在统一工具里硬编码新增平台。公开能力字段白名单，不导出凭据；缺失、未实现、未启用或当前不可调用的操作明确拒绝。
