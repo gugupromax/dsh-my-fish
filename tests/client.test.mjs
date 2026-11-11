@@ -50,7 +50,9 @@ function harness(options={}){
       if(bindingWorkspaceId){value.selectedWorkspaceId=bindingWorkspaceId;if(options.bindingCandidatesByGroup)value.candidates=structuredClone(options.bindingCandidatesByGroup[bindingWorkspaceId]||[]);}
       return {ok:true,json:async()=>value};
     }
+    if(body===undefined&&route==='exploration')return {ok:true,json:async()=>structuredClone(options.exploration||{ok:true,hidden:false,active:[],experiences:{interests:[],episodes:[]}})};
     if(body===undefined)return {ok:true,json:async()=>structuredClone(route==='state'?server.remote:route==='plans'?server.plans:route==='permissions'?server.permissions:route==='workspace'?server.workspace:route==='channels'?server.channels:route==='companion'?server.companion:server.assistant)};
+    if(route==='exploration/start'||route==='exploration/cancel')return {ok:true,json:async()=>({ok:true,note:route==='exploration/start'?'已开始逛公开内容':'已停止等待，不会重发'})};
     if(route==='session/bind'){
       const result=options.bindingResult||{ok:true,sessionId:body.sessionId,note:'已固定使用已有会话，没有创建聊天或发送消息。'};
       if(result.sessionId===body.sessionId){server.remote.sessionId=result.sessionId;server.sessionBinding={...server.sessionBinding,requiresBinding:false,selectedWorkspaceId:body.workspaceId,current:{sessionId:body.sessionId,workspaceId:body.workspaceId,cwd:server.sessionBinding.candidates.find(row=>row.id===body.sessionId)?.cwd||''}};}
@@ -298,6 +300,14 @@ test('guess-game cancellation uses the local settings request and displays its r
   assert.match(flatten(ui.render()),/当前没有进行中的猜评论/);
   const active=harness({guessCancelResult:{ok:true,cancelled:true,note:'已取消当前猜评论。'}});
   await active.click('取消当前猜评论');assert.match(flatten(active.render()),/已取消当前猜评论/);
+});
+
+test('public exploration controls use local routes and keep the main conversation binding',async()=>{
+  const ui=harness();await ui.click('自己逛一会儿');assert.deepEqual(ui.requests.find(r=>r.route==='exploration/start').body,{});
+  assert.match(flatten(ui.render()),/已开始逛公开内容/);
+  await ui.click('停止探索或结束等待');assert.equal(ui.requests.some(r=>r.route==='exploration/cancel'),true);
+  await ui.click('看看最近的经历');assert.match(flatten(ui.render()),/还没有已保存的阅读经历/);
+  assert.equal(ui.requests.some(r=>r.route==='session'||r.route==='session/bind'||r.route==='companion/chat'),false);
 });
 
 test('unknown companion outcomes retry with the same request key and leave the reference draft intact',async()=>{

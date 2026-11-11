@@ -33,3 +33,11 @@ test('missing caller or public SDK service fails closed without falling back to 
   ctx.loader={import:async()=>{throw Error('Synthetic unavailable SDK');}};
   await assert.rejects(invoke(input()),/unavailable/);assert.equal(batches,0);
 });
+
+test('optional injected loader avoids undeclared service access and can arrive after plugin mount',async()=>{
+  let service=null;const ctx={tools:{get(){},setExecutor(){}},get loader(){throw Error('Cannot access undeclared loader');}};
+  const invoke=createHostToolInvoker(ctx,{getLoader:()=>service});assert.equal(invoke.available(),false);
+  await assert.rejects(invoke(input()),/加载服务未就绪/);
+  class Pipeline{async prepare(exec){return {kind:'dispatch',exec};}async dispatch(){return {value:'synthetic'};}async complete(_exec,outcome){return outcome;}}
+  service={import:async()=>({ToolExecutionPipeline:Pipeline})};assert.equal(invoke.available(),true);assert.deepEqual(await invoke(input()),{value:'synthetic'});
+});

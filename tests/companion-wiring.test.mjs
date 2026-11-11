@@ -47,6 +47,19 @@ test('global pre-step guard preserves the downstream decision for main and unrel
   }
 });
 
+test('exploration settings routes validate local requests and do not start work while reading history',async t=>{
+  const f=fixture(t),before=JSON.stringify(f.store.state());
+  assert.equal((await f.http('/my-fish/api','GET','exploration')).body.hidden,false);
+  assert.equal(JSON.stringify(f.store.state()),before);assert.equal(f.requests.length,0);
+  for(const prefix of ['/my-fish/api','/x-whale/api']){
+    assert.equal((await f.http(prefix,'POST','exploration/start',{}, {origin:'https://outside.invalid'})).status,403);
+    assert.equal((await f.http(prefix,'POST','exploration/start',{secret:'not accepted'})).status,400);
+    assert.equal((await f.http(prefix,'POST','exploration/cancel',{})).status,200);
+  }
+  assert.equal(JSON.stringify(f.store.state()),before);
+  await assert.rejects(()=>f.tools.get('assistant_explore').execute({action:'status'},{agent:f.outside,signal:new AbortController().signal}),/专用/);
+});
+
 test('trusted settings cancel only the current main-session game and restore guarded tools',async t=>{
   const f=fixture(t),execute=args=>f.tools.get('assistant_guess').execute(args,{agent:f.main,signal:new AbortController().signal});
   const before=structuredClone(f.store.state());
@@ -64,7 +77,7 @@ test('trusted settings cancel only the current main-session game and restore gua
 });
 
 test('companion routes are trusted aliases and reading the empty layer creates no role or false interests',async t=>{
-  const f=fixture(t);assert.equal(f.tools.size,25);assert.equal(f.tools.has('assistant_guess'),true);assert.equal(f.tools.has('assistant_joke'),true);assert.equal(fs.existsSync(f.companion.file()),false);
+  const f=fixture(t);assert.equal(f.tools.size,27);assert.equal(f.tools.has('assistant_guess'),true);assert.equal(f.tools.has('assistant_joke'),true);assert.equal(fs.existsSync(f.companion.file()),false);
   for(const prefix of ['/my-fish/api','/x-whale/api']){
     const value=await f.http(prefix,'GET','companion');assert.equal(value.status,200);assert.deepEqual(value.body.threads,[]);assert.equal(fs.existsSync(f.companion.file()),false);
     assert.equal((await f.http(prefix,'GET','companion',undefined,{origin:'https://outside.invalid'})).status,403);

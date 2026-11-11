@@ -23,6 +23,8 @@ companion.json
 guess-game.json
 followups.json
 jokes.json
+experiences.json
+exploration.json
 config.json
 state.json
 my-fish-location.json
