@@ -239,11 +239,53 @@ function companionCard(tree,id=companionTopicId){const rows=findAll(tree,node=>n
 test('companion content precedes folded work settings without invented interests or platform activity',()=>{
   const tree=previewTree(),text=flatten(tree);
   assert.ok(text.indexOf('最近在琢磨')<text.indexOf('工作区'));assert.match(text,/还没有正在琢磨的话题/);assert.match(text,/还不能观看视频或读取音频/);
-  for(const title of ['工作区','需要帮忙时','定时计划','正在跟进','渠道与账号']){
+  for(const title of ['工作区','需要帮忙时','定时计划','正在跟进']){
     const rows=findAll(tree,node=>node.type==='details'&&node.children?.[0]?.type==='summary'&&flatten(node.children[0])===title);assert.equal(rows.length,1,title);assert.notEqual(rows[0].props.open,true);
   }
   assert.equal(findAll(tree,node=>node.type==='button'&&flatten(node)==='和助理聊天').length,1);
   assert.equal(findAll(tree,node=>node.props['data-companion-topic']).length,0);assert.match(text,/留给你的话/);assert.ok(!text.includes('QQ已连接'));
+});
+
+const tabsOf=tree=>findAll(tree,node=>node.props.role==='tab');
+const panelOf=(tree,id)=>findAll(tree,node=>node.props.id==='my-fish-panel-'+id)[0];
+const selectTab=(ui,id)=>{const tab=tabsOf(ui.render()).find(tab=>tab.props['data-fish-tab']===id);assert.ok(tab,id);tab.props.onClick();return ui.render();};
+
+test('My Fish secondary tabs show one panel with clear feature ownership',()=>{
+  const ui=harness(),tree=ui.render(),tabs=tabsOf(tree);assert.equal(tabs.length,7);
+  assert.deepEqual(tabs.map(tab=>flatten(tab)),['日常','角色','记忆','任务','渠道账号','设置','记录']);
+  assert.equal(tabs.filter(tab=>tab.props['aria-selected']).length,1);
+  for(const id of ['daily','persona','memory','tasks','channels','settings','records']){
+    const changed=selectTab(ui,id),panels=findAll(changed,node=>node.props.role==='tabpanel');
+    assert.equal(panels.filter(panel=>!panel.props.hidden).length,1);assert.equal(panelOf(changed,id).props.hidden,false);
+    assert.equal(tabsOf(changed).find(tab=>tab.props['data-fish-tab']===id).props.tabIndex,0);
+  }
+  assert.match(flatten(panelOf(ui.render(),'channels')),/账号.*检查连接与权限/);
+  assert.doesNotMatch(flatten(panelOf(ui.render(),'daily')),/保存个人权限|迁移工作区|保存定时计划/);
+  assert.match(flatten(panelOf(ui.render(),'settings')),/工作区.*允许本机命令.*什么时候主动跟进/s);
+  assert.equal(ui.requests.length,0);
+});
+
+test('switching tabs preserves drafts including account credentials without requests or implicit saves',()=>{
+  const ui=harness();selectTab(ui,'persona');ui.change('角色名','Synthetic unsaved role');selectTab(ui,'channels');ui.change('auth_token','synthetic-private-draft');
+  selectTab(ui,'tasks');ui.change('本次任务（可选）','Synthetic pending task');selectTab(ui,'memory');ui.change('记忆内容','Synthetic memory draft');
+  const before=JSON.stringify(ui.getModel());selectTab(ui,'records');selectTab(ui,'settings');selectTab(ui,'persona');
+  const after={...ui.getModel(),activePage:JSON.parse(before).activePage};assert.equal(JSON.stringify(after),before);
+  assert.equal(namedField(ui.render(),'角色名').props.value,'Synthetic unsaved role');assert.equal(ui.requests.length,0);
+  assert.match(flatten(tabsOf(ui.render()).find(tab=>tab.props['data-fish-tab']==='channels')),/未保存/);
+});
+
+test('tabs support arrow and Home/End focus navigation without changing settings',()=>{
+  const ui=harness();let focused,prevented=0;
+  const press=(id,key)=>{const tab=tabsOf(ui.render()).find(tab=>tab.props['data-fish-tab']===id);tab.props.onKeyDown({key,preventDefault:()=>prevented++,currentTarget:{parentElement:{querySelector:selector=>({focus:()=>focused=selector})}}});};
+  press('daily','ArrowLeft');assert.equal(ui.getModel().activePage,'records');assert.match(focused,/records/);
+  press('records','Home');assert.equal(ui.getModel().activePage,'daily');press('daily','End');assert.equal(ui.getModel().activePage,'records');
+  press('records','ArrowRight');assert.equal(ui.getModel().activePage,'daily');assert.equal(prevented,4);assert.equal(ui.requests.length,0);
+});
+
+test('background refresh retains the selected tab and its unsaved account draft',async()=>{
+  const ui=harness();await ui.mount();selectTab(ui,'channels');ui.change('auth_token','synthetic-unsubmitted-draft');await ui.poll();
+  assert.equal(ui.getModel().activePage,'channels');assert.equal(panelOf(ui.render(),'channels').props.hidden,false);
+  assert.equal(namedField(ui.render(),'auth_token').props.value,'synthetic-unsubmitted-draft');assert.equal(ui.requests.filter(request=>request.method==='POST').length,0);ui.unmount();
 });
 
 test('companion topics render genuine thoughts, exact user quotes and bounded source scope safely',()=>{
