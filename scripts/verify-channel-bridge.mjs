@@ -6,6 +6,7 @@ import {pathToFileURL} from 'node:url';
 import {createBilibiliAdapter} from '../lib/channels/bilibili.js';
 import {createHostToolInvoker} from '../lib/host-tool-invoke.js';
 import {hostToolsFixture} from './host-tools-fixture.mjs';
+import {agentRegistryView} from '../lib/agent-registry-view.js';
 
 const hostRoot=process.argv[2]||'D:/Program Files/DeepSeek Harness/resources/app.asar/dsh/node_modules';
 const toolFixture=await hostToolsFixture(hostRoot);
@@ -18,7 +19,7 @@ try{
   const baseUrl=pathToFileURL(path.join(hostRoot,'..','package.json')).href;ctx.baseUrl=baseUrl;
   for(const [plugin,config] of [[Loader,{baseUrl}],[SessionProjectionRegistry,{}],[SystemPrompt,{includeHarnessIdentity:false}],...toolFixture.plugins('native'),[AgentRegistry,{}]]){const fiber=ctx.plugin(plugin,config);fibers.push(fiber);await fiber;}
   const main={id:'synthetic-bili-main',session:{id:'synthetic-bili-main'}},child={id:'synthetic-bili-child',session:{id:'synthetic-bili-child'}};
-  detach.push(ctx.agents.enter(main));detach.push(ctx.agents.enter(child,main));assert.equal(ctx.agents.isOwnedBy(child.id,main),true);
+  detach.push(ctx.agents.enter(main));detach.push(ctx.agents.enter(child,main));assert.equal(agentRegistryView(ctx.agents,{rootOf:agent=>agent===child?main:agent}).isOwnedBy(child.id,main),true);
   const nestedInputs=[],outerTokens=[],outerExecutions=[],guarded=[];let bodies=0,deny=false,admitted=true;
   const invoke=createHostToolInvoker(ctx);
   const adapter=createBilibiliAdapter({fetchImpl:()=>{throw Error('No network may run in the host bridge test');},getTools:()=>ctx.tools,invokeTool:input=>{nestedInputs.push(input);return invoke(input);}});

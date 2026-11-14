@@ -58,6 +58,7 @@ try{
     [WorkingDirectoryService,{defaultDirectory:selected}],[AgentLoop,{agents:[],maxParallelToolCalls:1}],[SessionController,{nativeOpen:false}],
   ]){const fiber=ctx.plugin(plugin,config);fibers.push(fiber);await fiber;}
   // Block every synthetic turn before model admission, while preserving actual
+  const {default:Subagents}=await hostImport('dsh-subagent');const subagentFiber=ctx.plugin(Subagents,{});fibers.push(subagentFiber);await subagentFiber;
   // SessionController routing and real Agent/Session lifecycle events.
   disposers.push(ctx.on('agent/pre-step',()=>({kind:'reject',reason:'Synthetic session binding verifier: no model'})));
   const workspace=await ctx.workspaceRegistry.create(selected,'Synthetic selected workspace');
@@ -76,7 +77,8 @@ try{
   assert.equal(ctx.sessions.get(created.sessionId),agent.session,'The original started conversation remains intact');
   assert.ok(workspace.sessionIds.includes(created.sessionId));assert.ok(workspace.sessionIds.includes(replacement.sessionId));
   const {SessionBinding}=await import('../lib/session-binding.js');
-  const getRegistry=()=>ctx.workspaceRegistry,getSessions=()=>ctx.sessions,getPersistence=()=>ctx.sessionPersistence,getAgents=()=>ctx.agents;
+  const {agentRegistryView}=await import('../lib/agent-registry-view.js');
+  const getRegistry=()=>ctx.workspaceRegistry,getSessions=()=>ctx.sessions,getPersistence=()=>ctx.sessionPersistence,getAgents=()=>agentRegistryView(ctx.agents,ctx.subagents);
   const fixtureStore=new Store(selected),fixtureAssistant=new AssistantStore(fixtureStore),fixtureCompanion=new CompanionStore(fixtureStore);
   const binding=new SessionBinding({store:fixtureStore,getRegistry,getSessions,getPersistence,getAgents,signal});
   const originalSequence=agent.session.seq,originalProfile=fixtureAssistant.profile();

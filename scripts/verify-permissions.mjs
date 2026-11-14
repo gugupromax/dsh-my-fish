@@ -8,6 +8,7 @@ import {pathToFileURL} from 'node:url';
 import {Store} from '../lib/store.js';
 import {Permissions} from '../lib/permissions.js';
 import {hostToolsFixture} from './host-tools-fixture.mjs';
+import {agentRegistryView} from '../lib/agent-registry-view.js';
 
 const hostRoot=process.argv[2]||'D:/Program Files/DeepSeek Harness/resources/app.asar/dsh/node_modules';
 const toolFixture=await hostToolsFixture(hostRoot);
@@ -24,12 +25,13 @@ try {
     const fiber=ctx.plugin(plugin,config);fibers.push(fiber);await fiber;
   }
   const main={id:'synthetic-main',session:{id:'synthetic-main'}},child={id:'synthetic-child',session:{id:'synthetic-child'}},nested={id:'synthetic-nested',session:{id:'synthetic-nested'}},ordinary={id:'synthetic-ordinary',session:{id:'synthetic-ordinary',parentId:main.id}},plan={id:'synthetic-plan',session:{id:'synthetic-plan'}},planChild={id:'synthetic-plan-child',session:{id:'synthetic-plan-child'}};
+  const roots=new Map([[child,main],[nested,main],[planChild,plan]]),registry=agentRegistryView(ctx.agents,{rootOf:agent=>roots.get(agent)??agent});
   for(const [agent,owner] of [[main,undefined],[child,main],[nested,child],[ordinary,undefined],[plan,undefined],[planChild,plan]])detachAgents.push(ctx.agents.enter(agent,owner));
-  assert.equal(ctx.agents.isOwnedBy(child.id,main),true);
-  assert.equal(ctx.agents.isOwnedBy(nested.id,child),true);
-  assert.equal(ctx.agents.isOwnedBy(ordinary.id,main),false,'durable parent data is not runtime ownership');
+  assert.equal(registry.isOwnedBy(child.id,main),true);
+  assert.equal(registry.isOwnedBy(nested.id,main),true);
+  assert.equal(registry.isOwnedBy(ordinary.id,main),false,'durable parent data is not runtime ownership');
   const store=new Store(temporaryRoot);store.saveState({...store.state(),sessionId:main.id});
-  const permissions=new Permissions(store,{getRegistry:()=>ctx.agents,isPlanSession:exec=>exec?.agent?.session?.id===plan.session.id});
+  const permissions=new Permissions(store,{getRegistry:()=>registry,isPlanSession:exec=>exec?.agent?.session?.id===plan.session.id});
   let bodies=0,outerToken;
   for(const name of ['pwsh','web_search','read','ask_user_question','session_event_search','task_board_list','compress','write','synthetic_unknown_tool'])disposers.push(ctx.tools.register({name,description:'Synthetic no-op contract fixture',parameters:{type:'object',properties:{},additionalProperties:true},output:{schema:{},render:()=>[{type:'text',text:'Synthetic no-op'}]},execute:(_args,exec)=>{bodies++;if(name==='read')outerToken=exec.token;return {ok:true};}}));
   const disposeGuard=ctx.tools.guard(exec=>permissions.guard(exec));disposers.push(disposeGuard);
@@ -105,7 +107,7 @@ try {
   assert.equal((await toolFixture.invoke(ctx,input(nested,'pwsh'))).isError,false,'disposing the exact guard removes only this restriction');
   assert.equal(bodies,bodiesBeforeDisposal+1);
   detachAgents[2]();
-  assert.equal(ctx.agents.isOwnedBy(nested.id,child),false,'ownership ends when the actual registry entry detaches');
+  assert.equal(registry.isOwnedBy(nested.id,child),false,'ownership ends when the actual registry entry detaches');
   passed=true;
 } finally {
   for(const dispose of disposers.reverse())await dispose();

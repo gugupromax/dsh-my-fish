@@ -259,7 +259,7 @@ test('main tool updates current content through native update while preserving c
     assert.deepEqual(f.taskRows[0].schedule, initialSchedule);
     assert.deepEqual(f.taskRows[0].integrations, marker);
     assert.equal(f.taskRows[0].permission, 'read-only');
-    assert.equal(f.taskRows[0].reuseSession, false); assert.equal(f.taskRows[0].goalRun, false);
+    assert.equal(f.taskRows[0].reuseSession, false); assert.equal(f.taskRows[0].goalRun, undefined);
     const listed = await f.run('assistant_plan', { action: 'list' });
     assert.equal(listed.plans[0].instruction, instruction);
     assert.deepEqual(listed, JSON.parse(JSON.stringify(listed)), 'current content receipts are already lossless JSON');
@@ -376,7 +376,7 @@ test('new plans pin the registered native preset before the host create without 
   assert.equal(f.taskRows[0].mode, NATIVE_PLAN_MODE);
   assert.equal(created.plan.id, f.taskRows[0].id);
   assert.equal(f.taskRows[0].permission, 'read-only');
-  assert.equal(f.taskRows[0].reuseSession, false); assert.equal(f.taskRows[0].goalRun, false);
+  assert.equal(f.taskRows[0].reuseSession, false); assert.equal(f.taskRows[0].goalRun, undefined);
   f.taskRows[0].executions.push({ id: 'synthetic-native-run', sessionId: f.worker.session.id, startedAt: Date.now() });
   assert.equal(typeof f.callGuard('assistant_context', {}, f.worker), 'string', 'the read assertion must come from an actual plan scope');
   assert.equal(f.callGuard('x_whale_status', {}, f.worker), undefined);

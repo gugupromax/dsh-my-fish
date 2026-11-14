@@ -1,6 +1,8 @@
 # My Fish 项目规则
 
-先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.8.1 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
+先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.8.2 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
+
+- DSH0.2.2-rc.3移除agents.isOwnedBy；兼容视图使用可选注入subagents.rootOf核对精确live实例的整棵子任务树，旧版继续原registry接口。不以scope可见性、header.parentSession或自称parentId当归属。服务未就绪时不开放委派/换绑/迁移。看板0.4.18的严格create协议移除goalRun，必须省略，applyCardDefaults=false继续保持隔离，不重建实际计划。
 
 - My Fish设置使用内部二级标签页：日常、角色、记忆、任务、渠道账号、设置、记录；只显示当前面板，不能再将所有功能纵向堆叠。面板保持挂载保留原生展开状态与草稿；切换不调用API、不保存、不清空凭据。渠道卡片默认收起规则继续生效。
 

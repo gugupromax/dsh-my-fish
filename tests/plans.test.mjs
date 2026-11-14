@@ -130,7 +130,7 @@ test('create uses the public host action with fixed read-only isolated execution
   assert.equal(call.action.input.applyCardDefaults, false);
   assert.equal(call.action.input.reuseSession, false);
   assert.equal(Object.hasOwn(call.action.input, 'teamRun'), false, 'legacy team execution defaults off; retired wire fields must be omitted');
-  assert.equal(call.action.input.goalRun, false);
+  assert.equal(call.action.input.goalRun, undefined);
   assert.match(call.action.input.prompt, /assistant_plan_report/);
   assert.match(call.action.input.prompt, /不是个人主会话/);
   assert.equal(call.action.input.integrations[PLAN_INTEGRATION].sourceSessionId, 'main-session');
