@@ -38,7 +38,7 @@ try{
   await new Promise(resolve=>setImmediate(resolve));
   const store=new Store(),companion=new CompanionStore(store),mainId='synthetic-companion-main';
   store.saveState({...store.state(),sessionId:mainId});
-  assert.equal(definitions.length,27);for(const name of ['assistant_companion','assistant_guess','assistant_joke','assistant_explore','social_discover'])assert.ok(definitions.some(item=>item.name===name));
+  assert.equal(definitions.length,28);for(const name of ['assistant_companion','assistant_guess','assistant_joke','assistant_explore','social_discover'])assert.ok(definitions.some(item=>item.name===name));
   assert.ok(routes.some(item=>item.path==='/my-fish/api'));
 
   let main,ordinary;

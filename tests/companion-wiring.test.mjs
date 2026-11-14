@@ -60,6 +60,20 @@ test('exploration settings routes validate local requests and do not start work 
   await assert.rejects(()=>f.tools.get('assistant_explore').execute({action:'status'},{agent:f.outside,signal:new AbortController().signal}),/专用/);
 });
 
+test('companion optional settings are local, strict and initially disabled without network or installation',async t=>{
+  const f=fixture(t);const original=JSON.stringify(f.store.state());
+  for(const prefix of ['/my-fish/api','/x-whale/api']){
+    const value=await f.http(prefix,'GET','integrations');assert.equal(value.body.settings.rssEnabled,false);assert.equal(value.body.settings.videoEnabled,false);assert.equal(value.body.presentation.settings.enabled,false);
+    assert.equal((await f.http(prefix,'POST','integrations',{videoEnabled:true},{origin:'https://outside.invalid'})).status,403);
+    assert.equal((await f.http(prefix,'POST','presentation/check',[])).status,400);
+    assert.equal((await f.http(prefix,'POST','presentation/stop',{arbitrary:true})).status,400);
+    assert.equal((await f.http(prefix,'POST','video/stop',[])).status,400);
+    const metadata=await f.http(prefix,'GET','presentation/speech?after=0');assert.deepEqual(metadata.body.items,[]);
+  }
+  assert.equal(JSON.stringify(f.store.state()),original);assert.equal(f.requests.length,0);
+  const video=f.tools.get('assistant_video');await assert.rejects(()=>video.execute({reference:'BV1GJ411x7h7'},{agent:f.outside,signal:new AbortController().signal}),/专用/);
+});
+
 test('trusted settings cancel only the current main-session game and restore guarded tools',async t=>{
   const f=fixture(t),execute=args=>f.tools.get('assistant_guess').execute(args,{agent:f.main,signal:new AbortController().signal});
   const before=structuredClone(f.store.state());
@@ -77,7 +91,7 @@ test('trusted settings cancel only the current main-session game and restore gua
 });
 
 test('companion routes are trusted aliases and reading the empty layer creates no role or false interests',async t=>{
-  const f=fixture(t);assert.equal(f.tools.size,27);assert.equal(f.tools.has('assistant_guess'),true);assert.equal(f.tools.has('assistant_joke'),true);assert.equal(fs.existsSync(f.companion.file()),false);
+  const f=fixture(t);assert.equal(f.tools.size,28);assert.equal(f.tools.has('assistant_guess'),true);assert.equal(f.tools.has('assistant_joke'),true);assert.equal(fs.existsSync(f.companion.file()),false);
   for(const prefix of ['/my-fish/api','/x-whale/api']){
     const value=await f.http(prefix,'GET','companion');assert.equal(value.status,200);assert.deepEqual(value.body.threads,[]);assert.equal(fs.existsSync(f.companion.file()),false);
     assert.equal((await f.http(prefix,'GET','companion',undefined,{origin:'https://outside.invalid'})).status,403);

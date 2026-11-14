@@ -31,7 +31,7 @@ test('both trusted API aliases expose X and Bilibili metadata without issuing pl
   const f=fixture(t);
   for(const prefix of ['/my-fish/api','/x-whale/api']){
     const response=await f.request(prefix,'GET','channels');assert.equal(response.status,200);assert.equal(response.value.ok,true);
-    assert.deepEqual(response.value.platforms.map(row=>row.id),['x','bilibili']);
+    assert.deepEqual(response.value.platforms.map(row=>row.id),['x','bilibili','rss']);
     const bili=response.value.platforms.find(row=>row.id==='bilibili');assert.equal(bili.accountRequired,false);assert.equal(bili.implemented,true);assert.equal(bili.currentSessionVisible,null);
     for(const action of Object.values(bili.actions)){assert.equal(action.supported,false);assert.equal(action.enabled,false);}
     assert.equal((await f.request(prefix,'GET','channels',undefined,'https://untrusted.invalid')).status,403);

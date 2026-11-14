@@ -1,5 +1,11 @@
 # Third-party references
 
+## Optional companion interfaces (0.9)
+
+The presentation bridge consumes the public HTTP API of [PC2005-cloud/dsh-pet](https://github.com/PC2005-cloud/dsh-pet), reviewed against installed version 0.4.8 (MIT). The video bridge consumes the public tool and attachment contracts of [SAOS-3624/dsh-video-storyboard](https://github.com/SAOS-3624/dsh-video-storyboard), reviewed against version 0.7.4 (Apache-2.0). These are separately installed optional dependencies; My Fish does not redistribute their source, media assets, model providers or user configuration. Their respective licenses continue to apply to their own installations.
+
+RSS/Atom parsing and transport are independently implemented here; no GPL RSS plugin source is copied or bundled. Browser speech uses locally reported operating-system voices through the browser API; voice files are not distributed. FFmpeg, ffprobe and yt-dlp are separately installed optional media tools, not included in this package.
+
 ## dsh-bili-whale
 
 The Bilibili read-only adapter references the public API workflow and field meanings documented in [Alterssss/dsh-bili-whale](https://github.com/Alterssss/dsh-bili-whale), including its video and comment commands. The reference was reviewed for the My Fish 0.5.0 upgrade.

@@ -28,6 +28,14 @@ test('video conversation accepts canonical BV links and discards tracking while 
   for(const value of ['',null,'http://www.bilibili.com/video/BV1GJ411x7h7/','https://b23.tv/example','https://www.bilibili.com.evil.invalid/video/BV1GJ411x7h7/','https://name:password@www.bilibili.com/video/BV1GJ411x7h7/','https://www.bilibili.com:4430/video/BV1GJ411x7h7/','https://www.bilibili.com/video/not-bv/','https://www.bilibili.com/video/BV1GJ411x7h7/extra'])assert.throws(()=>companionVideoReference(value),/BV/);
 });
 
+test('explicit video mode requires consent, reuses the main and has its own stable dispatch fingerprint',async t=>{
+  const f=fixture(t),input={reference:'BV1GJ411x7h7',video:true,requestId:'synthetic-video-mode'};
+  await assert.rejects(f.runtime.chat(input),/开启视频/);assert.equal(f.requests.length,0);
+  f.runtime.canReadVideo=()=>true;await f.runtime.chat(input);assert.equal(f.requests.length,1);assert.equal(f.requests[0].sessionId,'synthetic-main');assert.match(f.requests[0].content[0].text,/assistant_video/);
+  await f.runtime.chat(input);assert.equal(f.requests.length,1);await assert.rejects(f.runtime.chat({...input,video:false}),/不能更换/);
+  await assert.rejects(f.runtime.chat({...input,requestId:'synthetic-both-modes',game:true}),/混用/);
+});
+
 test('explicit topic chat stays in the fixed main conversation and is idempotent across runtime reloads',async t=>{
   const f=fixture(t),topic=f.companion.start({title:'Synthetic curiosity',openQuestion:'What would explain this?'},'synthetic-main');
   const input={id:topic.id,requestId:'synthetic-chat-request-1'},before=f.store.config();

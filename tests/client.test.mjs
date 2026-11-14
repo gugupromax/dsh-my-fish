@@ -44,6 +44,9 @@ function harness(options={}){
     if(routePath==='session-binding'&&options.onBindingGet)await options.onBindingGet(bindingWorkspaceId);
     if(route==='session/bind'&&options.onBindingPost)await options.onBindingPost(body);
     if(options.failRoute===route||options.failRoute===routePath)return {ok:false,json:async()=>({ok:false,error:options.error||'连接失败'})};
+    if(body===undefined&&route==='integrations')return {ok:true,json:async()=>structuredClone(options.integrations||{ok:true,settings:{rssEnabled:false,videoEnabled:false,rssFeedLines:'',feedCount:0},presentation:{settings:{enabled:false,mode:'pet',petId:'',surface:'desktop',speak:false,animation:''}},video:{installed:false,note:'合成预览中没有视频依赖'}})};
+    if(route==='integrations'&&body!==undefined)return {ok:true,json:async()=>({ok:true,settings:body,note:'能力已保存'})};
+    if(route==='presentation')return {ok:true,json:async()=>({ok:true,settings:body,note:'表达已保存'})};
     if(body===undefined&&routePath==='session-binding'){
       const value=structuredClone(server.sessionBinding);
       if(!options.sessionBinding)value.current=server.remote.sessionId?{sessionId:server.remote.sessionId}:null;
@@ -286,6 +289,16 @@ test('background refresh retains the selected tab and its unsaved account draft'
   const ui=harness();await ui.mount();selectTab(ui,'channels');ui.change('auth_token','synthetic-unsubmitted-draft');await ui.poll();
   assert.equal(ui.getModel().activePage,'channels');assert.equal(panelOf(ui.render(),'channels').props.hidden,false);
   assert.equal(namedField(ui.render(),'auth_token').props.value,'synthetic-unsubmitted-draft');assert.equal(ui.requests.filter(request=>request.method==='POST').length,0);ui.unmount();
+});
+
+test('optional companion settings load explicitly and stay in nested feature tabs without enabling anything',async()=>{
+  const ui=harness();selectTab(ui,'settings');assert.equal(ui.requests.length,0);await ui.click('读取陪伴能力设置');
+  assert.equal(ui.requests.filter(r=>r.route==='integrations'&&r.method==='GET').length,1);assert.equal(ui.getModel().integrationDraft.videoEnabled,false);assert.equal(ui.getModel().presentationDraft.enabled,false);
+  const tabs=findAll(ui.render(),node=>node.props.id?.startsWith('fish-cap-tab-'));assert.equal(tabs.length,3);assert.equal(findAll(ui.render(),node=>node.props.id?.startsWith('fish-cap-panel-')&&!node.props.hidden).length,1);
+  tabs.find(tab=>tab.props.id==='fish-cap-tab-rss').props.onClick();ui.change('公开 RSS 来源，每行一个','Stories | https://example.com/rss.xml');
+  selectTab(ui,'persona');selectTab(ui,'settings');assert.equal(ui.getModel().capabilityPage,'rss');assert.equal(namedField(ui.render(),'公开 RSS 来源，每行一个').props.value,'Stories | https://example.com/rss.xml');
+  assert.equal(ui.requests.filter(r=>r.method==='POST').length,0);await ui.click('保存视频与 RSS 设置');
+  assert.deepEqual(ui.requests.find(r=>r.route==='integrations'&&r.method==='POST').body,{rssEnabled:false,videoEnabled:false,rssFeedLines:'Stories | https://example.com/rss.xml'});
 });
 
 test('companion topics render genuine thoughts, exact user quotes and bounded source scope safely',()=>{

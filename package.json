@@ -1,6 +1,6 @@
 {
   "name": "dsh-my-fish",
-  "version": "0.8.2",
+  "version": "0.9.0",
   "description": "My Fish：DSH 本地个人助理，独立记忆、持久任务与可管理权限",
   "repository": {
     "type": "git",
@@ -25,6 +25,7 @@
     "scripts/install-local.mjs",
     "scripts/install-local.ps1",
     "scripts/setup.ps1",
+    "scripts/check-companion-deps.mjs",
     "requirements.txt",
     "requirements-lock.txt",
     "cordis.patch.yml",

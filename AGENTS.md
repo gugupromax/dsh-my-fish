@@ -1,6 +1,10 @@
 # My Fish 项目规则
 
-先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.8.2 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
+先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.9.0 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
+
+- 0.9陪伴接驳默认关闭，不自动安装或启用第三方。桌宠只锁定并broadcast已提交的main回复，不调chat/whisper或接管另一套人设；未知不重发，只释放自己的锁。浏览器朗读仅选localService=true的中文音色，无云回退、无麦克风/VAD，发新消息/输入/隐藏/失租约时取消自身队列，不声称桌宠已有音频可可靠停止。
+- assistant_video仅主会话明确开启并触发，最多180秒/12帧/2图片，原生附件render保持attachment，不把路径当图片。只有本轮真实parent/rootCallId和精确agent的进行中probe/storyboard可经过未知工具分类；禁止后台/计划直接调用视频。上游可能沿用已有Cookie/ASR，不能宣称强制匿名、已取得字幕或像素已入模。忙碌/停止未确认时拒绝迁移和换绑。
+- RSS是独立实现的HTTPS订阅适配，DNS全部公共且pin连接、无重定向、无外链抓取/改写；只读源内正文/摘要。用户主会话与已登记后台才可读配置源，普通会话/计划不继承；仅read铸证据，discover不算读过。新integrations.json/presentation.json是工作区私有数据，禁止Git/发行包。
 
 - DSH0.2.2-rc.3移除agents.isOwnedBy；兼容视图使用可选注入subagents.rootOf核对精确live实例的整棵子任务树，旧版继续原registry接口。不以scope可见性、header.parentSession或自称parentId当归属。服务未就绪时不开放委派/换绑/迁移。看板0.4.18的严格create协议移除goalRun，必须省略，applyCardDefaults=false继续保持隔离，不重建实际计划。
 
