@@ -38,6 +38,64 @@ test('browser speech is synchronous, bounded, single-consumer and cleared on sto
  f.advance(4001);assert.equal(f.bridge.speech(6,'consumer-b').items.length,1);const epoch=a.epoch;await f.bridge.stop();assert.ok(f.bridge.speech().epoch>epoch);assert.equal(f.bridge.speech(0,'consumer-b').items.length,0);
  await f.bridge.observe({id:'main'},assistant('after-stop'));f.store.saveState({...f.store.state(),sessionId:'another-main'});assert.equal(f.bridge.speech(0,'consumer-a').items.length,0);
 });
+test('combined presentation independently queues local speech and sends one silent pet bubble without replay',async t=>{
+ const f=fixture(t);f.bridge.saveSettings({enabled:true,mode:'both',petId:'main',surface:'web',speak:false});
+ const result=await f.bridge.observe({id:'main'},assistant('combined'));assert.equal(result.accepted,true);
+ const speech=f.bridge.speech(0,'consumer-a');assert.equal(speech.enabled,true);assert.equal(speech.items.length,1);assert.equal(speech.items[0].text,'Synthetic actual reply');
+ const broadcast=f.calls.find(c=>c.url.includes('/broadcast'));assert.equal(broadcast.body.speak,false);assert.equal(f.calls.filter(c=>c.url.includes('/broadcast')).length,1);
+ assert.equal((await f.bridge.observe({id:'main'},assistant('combined'))).deduplicated,true);assert.equal(f.bridge.speech(0,'consumer-a').items.length,1);
+ await f.bridge.stop();assert.deepEqual(f.bridge.speech(0,'consumer-a').items,[]);assert.ok(f.calls.some(c=>c.url.includes('bubble/clear')));
+});
+test('combined presentation refuses duplicate pet voice and leaves previously saved settings untouched',async t=>{
+ const f=fixture(t);f.bridge.saveSettings({enabled:true,mode:'pet',petId:'main',speak:true});const before=f.bridge.settings();
+ assert.throws(()=>f.bridge.saveSettings({mode:'both'}),/关闭桌宠自身朗读/);assert.deepEqual(f.bridge.settings(),before);
+ assert.throws(()=>f.bridge.saveSettings({mode:'both',petId:'',speak:false}),/桌宠ID/);
+});
+test('combined presentation preserves a queued speech item even if pet transport fails without redelivery',async t=>{
+ const f=fixture(t,{fetchImpl:async url=>{if(url.includes('/lock?'))return new Response('{"ok":true,"lockId":"synthetic-lock"}');if(url.includes('/broadcast'))throw Error('synthetic unavailable');return new Response('{"ok":true}');}});
+ f.bridge.saveSettings({enabled:true,mode:'both',petId:'main',speak:false});assert.equal((await f.bridge.observe({id:'main'},assistant('broken-pet'))).uncertain,true);
+ assert.equal(f.bridge.speech(0,'consumer-a').items.length,1);assert.equal((await f.bridge.observe({id:'main'},assistant('broken-pet'))).deduplicated,true);
+});
+test('combined mode cancels both channels during an unresponsive pet broadcast and prevents late playback',async t=>{
+ let finish;const held=new Promise(resolve=>{finish=resolve;});const f=fixture(t,{fetchImpl:async url=>{if(url.includes('/lock?'))return new Response('{"ok":true,"lockId":"synthetic-lock"}');if(url.includes('/broadcast'))return held;return new Response('{"ok":true}');}});
+ f.bridge.saveSettings({enabled:true,mode:'both',petId:'main',speak:false});const job=f.bridge.observe({id:'main'},assistant('slow-broadcast'));await new Promise(resolve=>setImmediate(resolve));
+ const before=f.bridge.speech(0,'consumer-a');assert.equal(before.items.length,1);await f.bridge.stop();const result=await job;assert.equal(result.ok,false);assert.ok(f.bridge.speech(0,'consumer-a').epoch>before.epoch);assert.deepEqual(f.bridge.speech(0,'consumer-a').items,[]);
+ finish(new Response('{"ok":true}'));await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(f.bridge.speech(0,'consumer-a').items,[]);assert.equal((await f.bridge.observe({id:'main'},assistant('slow-broadcast'))).deduplicated,true);
+});
+test('activity actions default off and require explicitly configured safe action names',async t=>{
+ const f=fixture(t);f.bridge.saveSettings({enabled:true,petId:'main'});
+ await f.bridge.observe({id:'main'},{type:'turn/start',data:{turn:1}});await f.bridge.observe({id:'main'},{type:'tool/call',data:{turn:1,name:'read',arguments:'SECRET'}});assert.equal(f.calls.length,0);
+ assert.throws(()=>f.bridge.saveSettings({activityActions:{enabled:true,thinking:'../private'}}),/状态动作/);
+ assert.throws(()=>f.bridge.saveSettings({activityActions:{enabled:true,thinking:'safe',other:'x'}}),/状态动作/);
+ assert.equal(f.bridge.settings().activityActions.enabled,false);
+});
+test('main turn uses only selected action names, with one thinking and one PTC reading action',async t=>{
+ const f=fixture(t);f.bridge.saveSettings({enabled:true,petId:'main',surface:'web',activityActions:{enabled:true,thinking:'Synthetic thinking',reading:'Synthetic reading'}});
+ await f.bridge.observe({id:'other'},{type:'turn/start',data:{turn:1}});assert.equal(f.calls.length,0);
+ await f.bridge.observe({id:'main'},{type:'turn/start',data:{turn:1}});await f.bridge.observe({id:'main'},{type:'turn/start',data:{turn:1}});
+ await f.bridge.observe({id:'main'},{type:'tool/call',data:{turn:1,callId:'root-1',name:'run_code',arguments:'SECRET'}});
+ await f.bridge.observe({id:'main'},{type:'tool/ptc-dispatch-start',data:{name:'social_read',rootCallId:'old-root'}});
+ await f.bridge.observe({id:'main'},{type:'tool/ptc-dispatch-start',data:{name:'social_read',rootCallId:'root-1',arguments:{text:'SECRET'}}});
+ await f.bridge.observe({id:'main'},{type:'tool/ptc-dispatch-start',data:{name:'social_read',rootCallId:'root-1'}});
+ const animations=f.calls.filter(c=>c.url.includes('/anim'));assert.deepEqual(animations.map(c=>c.body),[{name:'Synthetic thinking'},{name:'Synthetic reading'}]);
+ assert.equal(JSON.stringify(f.calls).includes('SECRET'),false);assert.equal(f.calls.filter(c=>c.url.includes('/lock/release')).length,2);assert.equal(f.calls.some(c=>c.body?.force),false);
+ await f.bridge.observe({id:'main'},{type:'turn/end',data:{turn:1}});await f.bridge.observe({id:'main'},{type:'tool/call',data:{turn:1,name:'read'}});assert.equal(f.calls.filter(c=>c.url.includes('/anim')).length,2);
+ await f.bridge.observe({id:'main'},{type:'turn/start',data:{turn:2}});await f.bridge.observe({id:'main'},{type:'tool/ptc-dispatch-start',data:{name:'social_read',rootCallId:'root-1'}});assert.equal(f.calls.filter(c=>c.url.includes('/anim')).length,3);
+ await f.bridge.observe({id:'main'},{type:'tool/call',data:{turn:2,callId:'direct-2',name:'read'}});assert.equal(f.calls.filter(c=>c.url.includes('/anim')).length,4);
+});
+test('status action ignores occupied pet and never clears a committed reply bubble on turn end',async t=>{
+ const f=fixture(t);f.bridge.saveSettings({enabled:true,petId:'main',activityActions:{enabled:true,thinking:'Think',reading:'Read'}});await f.bridge.observe({id:'main'},assistant('existing'));
+ const before=f.calls.length;await f.bridge.observe({id:'main'},{type:'turn/start',data:{turn:2}});await f.bridge.observe({id:'main'},{type:'tool/call',data:{turn:2,name:'read'}});await f.bridge.observe({id:'main'},{type:'turn/end',data:{turn:2}});
+ assert.equal(f.calls.length,before);assert.equal(f.calls.some(c=>c.url.includes('bubble/clear')),false);
+});
+test('late activity acknowledgement cannot animate after stop or a main-session change',async t=>{
+ let resolve;const pending=new Promise(done=>{resolve=done;});const calls=[];
+ const f=fixture(t,{fetchImpl:async(url,init)=>{calls.push({url,body:JSON.parse(init.body)});if(url.includes('/lock?'))return pending;return new Response('{"ok":true}');}});
+ f.bridge.saveSettings({enabled:true,petId:'main',activityActions:{enabled:true,thinking:'Think',reading:'Read'}});
+ const start=f.bridge.observe({id:'main'},{type:'turn/start',data:{turn:3}});await new Promise(done=>setImmediate(done));await f.bridge.stop();await start;
+ resolve(new Response('{"ok":true,"lockId":"late-lock"}'));await new Promise(done=>setImmediate(done));assert.equal(calls.some(c=>c.url.includes('/anim')),false);
+ f.store.saveState({...f.store.state(),sessionId:'new-main'});await f.bridge.observe({id:'main'},{type:'tool/call',data:{turn:3,name:'read'}});assert.equal(calls.some(c=>c.url.includes('/anim')),false);
+});
 test('explicit dependency check projects state keys only and never returns unrelated pet data',async t=>{
  const f=fixture(t,{fetchImpl:async(url,init)=>{assert.equal(init.method,'GET');assert.equal(new URL(url).pathname,'/dsh-pet-7340/state');return new Response(JSON.stringify({counter:1,pets:{main:{say:{data:{text:'private chat'}}}},sections:{balance:{data:{amount:42}},config:{data:{path:'private'}}}}));}});
  const result=await f.bridge.check();assert.equal(result.connected,true);assert.deepEqual(result.pets,[{id:'main',name:'main'}]);assert.equal(result.catalogComplete,false);assert.equal(JSON.stringify(result).includes('private'),false);assert.equal(JSON.stringify(result).includes('amount'),false);

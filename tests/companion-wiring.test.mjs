@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {Readable} from 'node:stream';
 import plugin from '../lib/index.js';
-import {Store} from '../lib/store.js';
+import {Store,atomic} from '../lib/store.js';
 import {CompanionStore} from '../lib/companion-store.js';
 import {ExperienceStore} from '../lib/experience-store.js';
 
@@ -34,7 +34,7 @@ function fixture(t,{fetchImpl,speechService}={}){
     const res={statusCode:0,setHeader(){},end(text){this.body=JSON.parse(text);}};await routes.get(prefix)(req,res);return {status:res.statusCode,body:res.body};
   }
   const run=(args,agent=main)=>tools.get('assistant_companion').execute(args,{agent,signal:new AbortController().signal});
-  return {store,companion,tools,requests,main,outside,emit,http,run,guards,listeners};
+  return {store,companion,tools,requests,main,outside,emit,http,run,guards,listeners,ctx};
 }
 
 test('global pre-step guard preserves the downstream decision for main and unrelated conversations',async t=>{
@@ -97,6 +97,18 @@ test('stale association appears in trusted diagnostics and can be unlinked witho
   const pair={threadId:thread.id,interestId:interest.id};assert.equal((await f.http('/my-fish/api','POST','interest-links',{action:'link',...pair})).body.ok,true);
   f.companion.forget(thread.id);const list=(await f.http('/my-fish/api','GET','interest-links')).body.links;assert.equal(list.length,1);assert.equal(list[0].threadMissing,true);assert.equal(list[0].interestMissing,false);
   assert.equal((await f.http('/my-fish/api','POST','interest-links',{action:'unlink',...pair})).body.ok,true);assert.equal(store.interests('synthetic-main').length,1);
+});
+
+test('pausing a linked interest removes only its verified queued opening and reports uncertain outcomes',async t=>{
+  const f=fixture(t),thread=(await f.run({action:'start',title:'Synthetic topic',openQuestion:'Question?'})).thread;
+  const experience=new ExperienceStore(f.store).record({id:'queue-episode',runId:'queue-run',mainSessionId:'synthetic-main',title:'Synthetic',question:'Question?',thought:'Thought',reason:'Reason',sources:[{id:'queue-source',platform:'bilibili',operation:'read',reference:'BV1GJ411x7h7',url:'https://www.bilibili.com/video/BV1GJ411x7h7/',title:'Synthetic',excerpt:'Synthetic',scope:'metadata',truncated:false,readAt:Date.now()}],origin:'fish'}).interest;
+  const pair={threadId:thread.id,interestId:experience.id};await f.http('/my-fish/api','POST','interest-links',{action:'link',...pair});
+  const opening={runId:'queue-run',mainSessionId:'synthetic-main',interestId:experience.id,status:'queued',requestId:'my-fish-chat-discovery-queue-run',turn:null,at:1,manual:false,day:'2000-01-01',fingerprint:'synthetic',sourceUrls:[]};
+  atomic(f.store.file('assistant/exploration.json'),{version:1,runs:[],openings:[opening],lastUserAt:0});
+  const other={id:'other',source:{kind:'user',rpcId:'other'}},queued={id:'queued',source:{kind:'user',rpcId:opening.requestId}};f.main.inbox={nextTurn:[other,queued],nextStep:[]};let calls=0;
+  f.ctx.sessionController.updateQueue=async req=>{calls++;assert.equal(req.itemId,'queued');f.main.inbox.nextTurn=f.main.inbox.nextTurn.filter(x=>x.id!==req.itemId);return {accepted:true};};
+  const paused=await f.http('/my-fish/api','POST','interest-links',{action:'pause',requestId:'queue-pause',...pair});assert.equal(paused.body.ok,true);assert.match(paused.body.note,/移除尚未发送/);assert.equal(calls,1);assert.deepEqual(f.main.inbox.nextTurn,[other]);
+  assert.equal((await f.http('/my-fish/api','POST','interest-links',{action:'pause',requestId:'queue-pause',...pair})).body.deduplicated,true);assert.equal(calls,1);
 });
 
 test('companion optional settings are local, strict and initially disabled without network or installation',async t=>{
@@ -190,4 +202,22 @@ test('the actual guarded Bilibili facade mints usable evidence from its bounded 
   const changed=await f.run({action:'reflect',id:started.thread.id,thought:'A synthetic interpretation of the read description.',reason:'The actual facade returned this description.',nextQuestion:'Does the comment sample agree?',receiptIds:[actual.companionReceipts[0].id]});
   assert.equal(changed.thread.revision,1);assert.equal(changed.thread.latestSources[0].url,'https://www.bilibili.com/video/BV1GJ411x7h7/');
   assert.equal(f.requests.length,0);assert.equal(f.store.config().allowReplies,false);
+});
+
+test('trusted Bilibili candidates are explicitly discovered and selected without minting read evidence',async t=>{
+  const calls=[],f=fixture(t,{fetchImpl:async url=>{calls.push(String(url));assert.equal(new URL(url).pathname,'/x/web-interface/popular');return new Response(JSON.stringify({code:0,data:{list:[{bvid:'BV1GJ411x7h7',title:'Synthetic popular video',desc:'Synthetic candidate only',owner:{name:'Synthetic author'},pubdate:1700000000}],no_more:true}}),{headers:{'content-type':'application/json'}});}});
+  assert.equal((await f.http('/my-fish/api','GET','bilibili/candidates')).body.items.length,0);assert.equal(calls.length,0);
+  assert.equal((await f.http('/my-fish/api','POST','bilibili/candidates/refresh',{}, {origin:'https://outside.invalid'})).status,403);
+  const found=await f.http('/my-fish/api','POST','bilibili/candidates/refresh',{});assert.equal(found.status,200);assert.equal(found.body.mainSessionId,'synthetic-main');assert.equal(found.body.items.length,1);assert.equal(calls.length,1);
+  assert.equal((await f.http('/my-fish/api','POST','bilibili/candidates/select',{bvid:'BV1abcdefghi'})).status,400);
+  const selected=await f.http('/my-fish/api','POST','bilibili/candidates/select',{bvid:'BV1GJ411x7h7'});assert.equal(selected.body.reference,'BV1GJ411x7h7');assert.equal(calls.length,1);assert.equal(f.companion.snapshot().receipts.length,0);assert.equal(f.requests.length,0);
+  f.store.saveState({...f.store.state(),sessionId:'synthetic-other'});assert.equal((await f.http('/my-fish/api','POST','bilibili/candidates/select',{bvid:'BV1GJ411x7h7'})).status,400);
+});
+
+test('a pending candidate fetch is invalidated before a binding attempt, even when binding fails',async t=>{
+  let release,entered;const gate=new Promise(resolve=>{release=resolve;}),started=new Promise(resolve=>{entered=resolve;});
+  const f=fixture(t,{fetchImpl:async()=>{entered();await gate;return new Response(JSON.stringify({code:0,data:{list:[{bvid:'BV1GJ411x7h7',title:'Synthetic'}],no_more:true}}),{headers:{'content-type':'application/json'}});}});
+  const refresh=f.http('/my-fish/api','POST','bilibili/candidates/refresh',{});await started;
+  const binding=await f.http('/my-fish/api','POST','session/bind',{workspaceId:'synthetic-invalid',sessionId:'synthetic-invalid'});assert.equal(binding.status,400);
+  release();assert.equal((await refresh).status,400);assert.equal((await f.http('/my-fish/api','GET','bilibili/candidates')).body.items.length,0);
 });

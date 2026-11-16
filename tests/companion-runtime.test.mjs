@@ -28,6 +28,10 @@ test('video conversation accepts canonical BV links and discards tracking while 
   for(const value of ['',null,'http://www.bilibili.com/video/BV1GJ411x7h7/','https://b23.tv/example','https://www.bilibili.com.evil.invalid/video/BV1GJ411x7h7/','https://name:password@www.bilibili.com/video/BV1GJ411x7h7/','https://www.bilibili.com:4430/video/BV1GJ411x7h7/','https://www.bilibili.com/video/not-bv/','https://www.bilibili.com/video/BV1GJ411x7h7/extra'])assert.throws(()=>companionVideoReference(value),/BV/);
 });
 
+test('chatting about recent thoughts reuses the main without requiring a new search',async t=>{
+  const f=fixture(t);await f.runtime.chat({requestId:'synthetic-recent-thoughts'});assert.equal(f.requests.length,1);assert.equal(f.requests[0].sessionId,'synthetic-main');assert.match(f.requests[0].content[0].text,/不要为了这次聊天强行搜索/);assert.equal(f.store.config().enabled,false);
+});
+
 test('explicit video mode requires consent, reuses the main and has its own stable dispatch fingerprint',async t=>{
   const f=fixture(t),input={reference:'BV1GJ411x7h7',video:true,requestId:'synthetic-video-mode'};
   await assert.rejects(f.runtime.chat(input),/开启视频/);assert.equal(f.requests.length,0);

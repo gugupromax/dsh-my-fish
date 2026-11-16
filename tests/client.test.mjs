@@ -53,6 +53,8 @@ function harness(options={}){
     if(body===undefined&&route==='integrations')return {ok:true,json:async()=>structuredClone(options.integrations||{ok:true,settings:{rssEnabled:false,videoEnabled:false,rssFeedLines:'',feedCount:0},presentation:{settings:{enabled:false,mode:'pet',petId:'',surface:'desktop',speak:false,animation:''}},video:{installed:false,note:'合成预览中没有视频依赖'}})};
     if(route==='integrations'&&body!==undefined)return {ok:true,json:async()=>({ok:true,settings:body,note:'能力已保存'})};
     if(route==='presentation')return {ok:true,json:async()=>({ok:true,settings:body,note:'表达已保存'})};
+    if(route==='bilibili/candidates/refresh')return {ok:true,json:async()=>({ok:true,mainSessionId:responseSession,items:[{bvid:'BV1GJ411x7h7',title:'合成热门视频',author:'合成作者',snippet:'公开摘要'}],fetchedAt:123,note:'仅为公开候选，不代表已阅读或观看。'})};
+    if(route==='bilibili/candidates/select')return {ok:true,json:async()=>({ok:true,mainSessionId:responseSession,reference:body.bvid,note:'仅选择候选'})};
     if(body===undefined&&routePath==='session-binding'){
       const value=structuredClone(server.sessionBinding);
       if(!options.sessionBinding)value.current=server.remote.sessionId?{sessionId:server.remote.sessionId}:null;
@@ -193,7 +195,7 @@ test('existing-session binding blocks accidental new chats, adopts the selected 
   const opened=[],ui=harness({remote:{sessionId:'synthetic-ungrouped'},sessionBinding:bindingFixture(),props:{openAssistantSession:id=>opened.push(id),close:()=>{}}});
   await ui.mount();
   assert.equal(namedField(ui.render(),'分组内已有会话').props.value,'synthetic-existing-a');
-  for(const label of ['和助理聊天','随便逛逛，回来聊','现在唤醒'])assert.equal(namedButton(ui.render(),label).props.disabled,true,label);
+  for(const label of ['和助理聊天','聊聊最近的想法','现在唤醒'])assert.equal(namedButton(ui.render(),label).props.disabled,true,label);
   const original=structuredClone(ui.server.assistant);await ui.click('固定使用这条会话');
   assert.deepEqual(ui.requests.filter(row=>row.method==='POST').map(({route,body})=>({route,body})),[{route:'session/bind',body:{workspaceId:'synthetic-group-a',sessionId:'synthetic-existing-a'}}]);
   assert.deepEqual(ui.server.assistant,original);assert.equal(ui.getModel().remote.sessionId,'synthetic-existing-a');assert.match(flatten(ui.render()),/已固定使用这条会话/);
@@ -236,7 +238,7 @@ test('binding is single-flight and freezes its inputs without sending other form
 test('unavailable or unreadable binding services keep settings usable while refusing uncertain session actions',async()=>{
   for(const options of [{sessionBinding:{...bindingFixture(),available:false,reason:'合成宿主分组服务未就绪'}},{sessionBinding:bindingFixture(),failRoute:'session-binding',error:'合成列表读取失败'}]){
     const ui=harness({remote:{sessionId:'synthetic-ungrouped'},...options});await ui.mount();
-    for(const label of ['和助理聊天','随便逛逛，回来聊','现在唤醒','固定使用这条会话'])assert.equal(namedButton(ui.render(),label).props.disabled,true,label);
+    for(const label of ['和助理聊天','聊聊最近的想法','现在唤醒','固定使用这条会话'])assert.equal(namedButton(ui.render(),label).props.disabled,true,label);
     assert.equal(namedField(ui.render(),'角色名').props.disabled,false);assert.ok(!ui.requests.some(row=>row.method==='POST'));
     assert.match(flatten(ui.render()),options.failRoute?/上次固定会话|上次记录/:/合成宿主分组服务未就绪/);
   }
@@ -330,6 +332,40 @@ test('optional companion settings load explicitly and stay in nested feature tab
   assert.deepEqual(ui.requests.find(r=>r.route==='integrations'&&r.method==='POST').body,{rssEnabled:false,videoEnabled:false,rssFeedLines:'Stories | https://example.com/rss.xml'});
 });
 
+test('pet presentation and browser speech can be independently enabled without automatic playback',async()=>{
+  const ui=harness();selectTab(ui,'settings');await ui.click('读取陪伴能力设置');
+  ui.change('桌宠气泡与动作','',true);assert.equal(ui.getModel().presentationDraft.mode,'pet');ui.change('桌宠 ID','main');
+  ui.change('让桌宠朗读气泡','',true);ui.change('浏览器本地中文朗读','',true);assert.equal(ui.getModel().presentationDraft.mode,'both');assert.equal(ui.getModel().presentationDraft.speak,false);
+  assert.match(flatten(ui.render()),/保存后关闭桌宠自身朗读/);assert.equal(ui.requests.filter(row=>row.method==='POST').length,0);
+  await ui.click('保存表达设置');const sent=ui.requests.find(row=>row.route==='presentation'&&row.method==='POST').body;assert.equal(sent.mode,'both');assert.equal(sent.enabled,true);assert.equal(sent.speak,false);
+  ui.change('桌宠气泡与动作','',false);assert.equal(ui.getModel().presentationDraft.mode,'browser');ui.change('浏览器本地中文朗读','',false);assert.equal(ui.getModel().presentationDraft.enabled,false);
+});
+
+test('pet activity actions remain off for legacy settings until explicitly configured and saved',async()=>{
+  const ui=harness();selectTab(ui,'settings');await ui.click('读取陪伴能力设置');
+  assert.equal(ui.getModel().presentationDraft.activityActions,undefined);
+  ui.change('桌宠气泡与动作','',true);ui.change('桌宠 ID','main');
+  assert.equal(namedField(ui.render(),'启用思考与阅读动作').props.checked,false);
+  assert.equal(namedField(ui.render(),'思考动作名称').props.value,'');
+  assert.equal(namedField(ui.render(),'阅读动作名称').props.value,'');
+  ui.change('思考动作名称','Think');ui.change('阅读动作名称','Read');ui.change('启用思考与阅读动作','',true);
+  assert.deepEqual(JSON.parse(JSON.stringify(ui.getModel().presentationDraft.activityActions)),{enabled:true,thinking:'Think',reading:'Read'});
+  assert.equal(ui.requests.filter(row=>row.method==='POST').length,0);
+  await ui.click('保存表达设置');
+  const sent=ui.requests.find(row=>row.route==='presentation'&&row.method==='POST').body;
+  assert.deepEqual(sent.activityActions,{enabled:true,thinking:'Think',reading:'Read'});
+  assert.equal(sent.petId,'main');assert.equal(sent.mode,'pet');
+  ui.unmount();
+});
+
+test('public Bilibili candidates require an explicit discovery and selection without overwriting drafts',async()=>{
+  const ui=harness({remote:{sessionId:'companion-main'}});assert.equal(ui.requests.length,0);
+  await ui.click('发现B站公开热门');assert.equal(ui.requests.filter(r=>r.method==='POST').length,1);assert.match(flatten(ui.render()),/仅为公开候选/);
+  ui.change('想一起聊的B站链接','synthetic draft');assert.equal(namedButton(ui.render(),'选择 BV1GJ411x7h7').props.disabled,true);ui.change('想一起聊的B站链接','');
+  await ui.click('选择 BV1GJ411x7h7');assert.equal(namedField(ui.render(),'想一起聊的B站链接').props.value,'BV1GJ411x7h7');assert.equal(ui.requests.some(r=>r.route==='companion/chat'),false);
+  await ui.click('聊这个');assert.equal(ui.requests.find(r=>r.route==='companion/chat').body.reference,'BV1GJ411x7h7');
+});
+
 test('companion topics render genuine thoughts, exact user quotes and bounded source scope safely',()=>{
   const data=companionFixture();data.threads[0].latestSources.push({title:'不安全链接',url:'javascript:alert(1)',scope:'未使用'});
   const ui=harness({companion:data}),card=companionCard(ui.render()),text=flatten(card);
@@ -362,7 +398,7 @@ test('continuing a topic without navigation keeps a useful local result and requ
 
 test('companion actions protect every existing draft and preserve an unfinished Bilibili link',()=>{
   for(const [label,value] of [['人设正文','未保存人设'],['记忆内容','未保存记忆'],['目标','未保存目标'],['计划名称','未保存计划'],['本次任务（可选）','未发送文字']]){
-    const ui=harness({companion:companionFixture()});ui.change(label,value);assert.equal(namedButton(companionCard(ui.render()),'接着聊').props.disabled,true,label);assert.equal(namedButton(ui.render(),'随便逛逛，回来聊').props.disabled,true,label);
+    const ui=harness({companion:companionFixture()});ui.change(label,value);assert.equal(namedButton(companionCard(ui.render()),'接着聊').props.disabled,true,label);assert.equal(namedButton(ui.render(),'聊聊最近的想法').props.disabled,true,label);
     ui.change('想一起聊的B站链接','BV1GJ411x7h7');assert.equal(namedButton(ui.render(),'聊这个').props.disabled,true,label);assert.equal(ui.requests.length,0);
   }
   const ui=harness({companion:companionFixture(),remote:{sessionId:'main'},props:{openAssistantSession:()=>{},close:()=>{}}});ui.change('想一起聊的B站链接','BV1GJ411x7h7');assert.equal(namedButton(ui.render(),'和助理聊天').props.disabled,false);assert.equal(namedButton(companionCard(ui.render()),'接着聊').props.disabled,true);assert.equal(namedButton(ui.render(),'聊这个').props.disabled,false);
@@ -387,7 +423,7 @@ test('guess-game cancellation uses the local settings request and displays its r
 });
 
 test('public exploration controls use local routes and keep the main conversation binding',async()=>{
-  const ui=harness();await ui.click('自己逛一会儿');assert.deepEqual(ui.requests.find(r=>r.route==='exploration/start').body,{});
+  const ui=harness();await ui.click('让 My Fish 自己逛逛');assert.deepEqual(ui.requests.find(r=>r.route==='exploration/start').body,{});
   assert.match(flatten(ui.render()),/已开始逛公开内容/);
   await ui.click('停止探索或结束等待');assert.equal(ui.requests.some(r=>r.route==='exploration/cancel'),true);
   await ui.click('看看最近的经历');assert.match(flatten(ui.render()),/还没有已保存的阅读经历/);
@@ -439,7 +475,7 @@ test('uncertain server dispatches stay uncertain and retain the same key and lin
 });
 
 test('concurrent companion clicks share one queued request and freeze other forms',async()=>{
-  let finish;const gate=new Promise(resolve=>{finish=resolve;}),ui=harness({onCompanionChat:()=>gate});const button=namedButton(ui.render(),'随便逛逛，回来聊');
+  let finish;const gate=new Promise(resolve=>{finish=resolve;}),ui=harness({onCompanionChat:()=>gate});const button=namedButton(ui.render(),'聊聊最近的想法');
   const first=button.props.onClick(),second=button.props.onClick();assert.equal(ui.requests.filter(row=>row.route==='companion/chat').length,1);assert.equal(namedField(ui.render(),'角色名').props.disabled,true);assert.equal(namedButton(ui.render(),'聊这个').props.disabled,true);finish();await Promise.all([first,second]);assert.equal(ui.getModel().busy,false);
 });
 

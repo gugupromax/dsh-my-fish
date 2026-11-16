@@ -1,6 +1,6 @@
 # My Fish 项目规则
 
-先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.9.1 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
+先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.10.0 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
 
 - 统一兴趣关联必须由用户明确选择，不按名称推断；两个存储分别保留。联动动作持久请求ID和完成回执，部分完成时冻结探索并允许原会话重试，不能单侧误报成功。残缺/跨会话冲突只允许明确解除；interest-links、interest-operation和interest-completed-archive均为私有数据。兴趣列表和话题刷新按主会话及请求代次隔离。
 - 探索与计划通过作用域 suppressRuntimeContext 抑制可选运行时上下文；宿主required上下文、系统段落和变量仍可能进入，不能声称完全隔离。缺此宿主接口时预设应安全失败。普通表单草稿仅留前端内存，按会话与工作区隔离；账号及敏感配置不写缓存。
