@@ -29,7 +29,7 @@ test('video conversation accepts canonical BV links and discards tracking while 
 });
 
 test('chatting about recent thoughts reuses the main without requiring a new search',async t=>{
-  const f=fixture(t);await f.runtime.chat({requestId:'synthetic-recent-thoughts'});assert.equal(f.requests.length,1);assert.equal(f.requests[0].sessionId,'synthetic-main');assert.match(f.requests[0].content[0].text,/不要为了这次聊天强行搜索/);assert.equal(f.store.config().enabled,false);
+  const f=fixture(t);await f.runtime.chat({requestId:'synthetic-recent-thoughts'});assert.equal(f.requests.length,1);assert.equal(f.requests[0].sessionId,'synthetic-main');assert.match(f.requests[0].content[0].text,/assistant_explore 的 status/);assert.match(f.requests[0].content[0].text,/不要为了这次聊天强行搜索/);assert.equal(f.store.config().enabled,false);
 });
 
 test('explicit video mode requires consent, reuses the main and has its own stable dispatch fingerprint',async t=>{

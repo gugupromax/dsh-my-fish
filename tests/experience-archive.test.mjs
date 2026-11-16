@@ -1,0 +1,15 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import {Store,atomic} from '../lib/store.js';
+import {ExperienceStore} from '../lib/experience-store.js';
+
+function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'fish-archive-'));t.after(()=>fs.rmSync(root,{recursive:true,force:true}));const store=new Store(root),experiences=new ExperienceStore(store,{now:()=>1800000000000});return {store,experiences};}
+const request=(id,interestId)=>({id,runId:'run-'+id,mainSessionId:'main',...(interestId?{interestId}:{}),title:'Synthetic',question:'Question',thought:'Thought',reason:'Reason',nextQuestion:'',sources:[{id:'source',platform:'bilibili',operation:'read',reference:'example',url:'https://example.org/',title:'Example',excerpt:'Example',scope:'public',truncated:false,readAt:1799999999000}],origin:'fish'});
+function full(f){const first=f.experiences.record(request('episode-0'));const data=f.experiences.state();data.episodes=Array.from({length:120},(_,i)=>({...data.episodes[0],id:'episode-'+i,runId:'run-episode-'+i}));data.tombstones.episodeIds=Array.from({length:2000},(_,i)=>'old-'+i);atomic(f.experiences.file(),data);return first.interest.id;}
+test('archived tombstones preserve old identifiers across boundary, restart, and forget',t=>{const f=fixture(t),interest=full(f);f.experiences.record(request('new-episode',interest));const reloaded=new ExperienceStore(f.store,{now:()=>1800000000000});assert.throws(()=>reloaded.record(request('old-0',interest)),/旧标识/);assert.throws(()=>reloaded.record(request('episode-0',interest)),/旧标识/);assert.equal(reloaded.forget(interest).ok,true);assert.equal(reloaded.forget(interest).ok,true);assert.throws(()=>reloaded.record(request('new-episode',interest)),/旧标识/);});
+test('archive-first interrupted compaction leaves old live data and retries safely',t=>{const f=fixture(t),interest=full(f),before=f.experiences.state();atomic(f.experiences.archiveFile(),{version:1,interestIds:[],episodeIds:before.tombstones.episodeIds});const loaded=new ExperienceStore(f.store,{now:()=>1800000000000});assert.equal(loaded.episodes('main').length,120);loaded.record(request('next',interest));assert.throws(()=>loaded.record(request('old-1',interest)),/旧标识/);});
+test('missing required archive and corrupt archive fail closed',t=>{const f=fixture(t),interest=full(f);f.experiences.record(request('next',interest));fs.rmSync(f.experiences.archiveFile());assert.throws(()=>f.experiences.state(),/归档缺失/);assert.throws(()=>f.experiences.record(request('old-0',interest)),/归档缺失/);fs.writeFileSync(f.experiences.archiveFile(),'not-json');assert.throws(()=>f.experiences.state(),/损坏/);});
+test('archive write failure preserves the complete previously stored state',t=>{const f=fixture(t),interest=full(f),before=fs.readFileSync(f.experiences.file(),'utf8');fs.mkdirSync(f.experiences.archiveFile());assert.throws(()=>f.experiences.forget(interest));assert.equal(fs.readFileSync(f.experiences.file(),'utf8'),before);assert.equal(f.experiences.interests('main').length,1);});

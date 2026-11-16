@@ -13,6 +13,20 @@ test('disabled and unrelated events are side effect free and cannot generate ano
  assert.throws(()=>f.bridge.saveSettings({endpoint:'https://evil.example'}),/字段/);assert.throws(()=>f.bridge.saveSettings({surface:'any'}),/格式/);
  assert.throws(()=>f.bridge.saveSettings(null),/字段/);assert.throws(()=>f.bridge.saveSettings([]),/字段/);
 });
+test('diagnostics report actual outcomes without storing content and are scoped to current main',async t=>{
+ const f=fixture(t);assert.equal(f.bridge.snapshot().diagnostics.reply.code,'disabled');await f.bridge.observe({id:'main'},assistant('disabled'));assert.equal(f.bridge.snapshot().diagnostics.reply.code,'disabled');
+ f.bridge.saveSettings({enabled:true,petId:'main',activityActions:{enabled:true,thinking:'Think'}});
+ await f.bridge.observe({id:'main'},assistant('long','PRIVATE TEXT '+ 'x'.repeat(1601)));assert.equal(f.bridge.snapshot().diagnostics.reply.code,'too_long');assert.equal(f.calls.length,0);
+ await f.bridge.observe({id:'main'},assistant('ok','PRIVATE TEXT'));assert.equal(f.bridge.snapshot().diagnostics.reply.code,'accepted');
+ await f.bridge.observe({id:'main'},{type:'turn/start',data:{turn:7}});assert.equal(f.bridge.snapshot().diagnostics.activity.code,'busy');
+ assert.equal(JSON.stringify(f.bridge.snapshot()).includes('PRIVATE TEXT'),false);assert.equal(fs.readFileSync(f.bridge.file(),'utf8').includes('PRIVATE TEXT'),false);
+ f.store.saveState({...f.store.state(),sessionId:'other'});const snapshot=f.bridge.snapshot();assert.equal(snapshot.diagnostics.reply.code,'unchecked');assert.equal(snapshot.diagnostics.activity.code,'unchecked');assert.deepEqual(snapshot.last,[]);
+});
+test('failed transport appears as unknown without leaking error text',async t=>{
+ const f=fixture(t,{fetchImpl:async()=>{throw Error('PRIVATE transport details');}});f.bridge.saveSettings({enabled:true,petId:'main',activityActions:{enabled:true,thinking:'Think'}});
+ await f.bridge.observe({id:'main'},{type:'turn/start',data:{turn:1}});assert.equal(f.bridge.snapshot().diagnostics.activity.code,'unknown');
+ await f.bridge.observe({id:'main'},assistant());assert.equal(f.bridge.snapshot().diagnostics.reply.code,'unknown');assert.equal(JSON.stringify(f.bridge.snapshot()).includes('PRIVATE'),false);
+});
 test('committed main replies use exact locked local broadcast parameters and durable message deduplication',async t=>{
  const f=fixture(t);f.bridge.saveSettings({enabled:true,petId:'main',surface:'web',speak:true,animation:'Synthetic action'});
  assert.equal((await f.bridge.observe({id:'main'},assistant())).accepted,true);assert.equal(f.calls.length,3);

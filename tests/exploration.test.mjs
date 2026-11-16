@@ -9,6 +9,7 @@ import {CompanionStore} from '../lib/companion-store.js';
 import {ExperienceStore} from '../lib/experience-store.js';
 import {Exploration} from '../lib/exploration.js';
 import {Scheduler} from '../lib/scheduler.js';
+import {registerExploreTools} from '../lib/explore-tools.js';
 const BV='BV1GJ411x7h7',url='https://www.bilibili.com/video/'+BV+'/';
 function fixture(t){
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'fish-exploration-')),store=new Store(root),assistant=new AssistantStore(store),companion=new CompanionStore(store),experiences=new ExperienceStore(store);
@@ -22,6 +23,12 @@ function fixture(t){
   const report=receipt=>explore.report({runId:explore.active().id,quiet:false,share:true,title:'Synthetic interest',question:'Why does this work?',thought:'An actual synthetic observation',reason:'A concrete detail',nextQuestion:'What happens next?',receiptIds:[receipt.id]},exec('assistant_explore'));
   return {store,assistant,companion,experiences,explore,host,controller,main,started,cancelled,prompts,exec,read,report,advance:ms=>{now+=ms;},now:()=>now};
 }
+test('status returns current active interests despite unrelated last message, and respects pause',t=>{
+  const f=fixture(t);const now=f.now(),topic=f.experiences.record({id:'interest-episode',runId:'interest-run',mainSessionId:'main',title:'火山摄影',question:'火山为什么有不同颜色',thought:'岩浆的颜色很特别',reason:'Synthetic source',nextQuestion:'继续看看',origin:'fish',sources:[{id:'receipt',platform:'bilibili',operation:'read',reference:BV,url,title:'Synthetic',excerpt:'Synthetic detail',scope:'Public metadata',truncated:false,readAt:now}]}).interest;
+  f.companion.recordUserMessage({id:'work-msg',text:'今天的SQL怎么改',sessionId:'main',at:now});assert.equal(f.experiences.context('今天的SQL怎么改','main').interests.length,0);
+  let execute;registerExploreTools({tool:(_n,_d,_p,fn)=>execute=fn,exploration:f.explore,experiences:f.experiences,companion:f.companion,store:f.store,engine:{serial:fn=>fn()},requirePersonal:()=>{}});
+  assert.equal(execute({action:'status'},null,{}).experiences.interests[0].id,topic.id);f.experiences.setInterest(topic.id,'paused');assert.equal(execute({action:'status'},null,{}).experiences.interests.length,0);
+});
 test('unfinished interest operation blocks discovery, evidence, reporting and opening',async t=>{
   const f=fixture(t);await f.explore.start();const run=f.explore.active(),exec=f.exec('social_read',{platform:'bilibili',reference:BV});let pending={action:'pause'};f.explore.getInterestPending=()=>pending;
   assert.match(f.explore.guard(exec),/兴趣操作尚未完成/);assert.equal(f.explore.preStep({agent:exec.agent}).kind,'reject');assert.deepEqual(f.explore.capture({exec}),[]);

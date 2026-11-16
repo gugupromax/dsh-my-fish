@@ -50,7 +50,7 @@ function harness(options={}){
     if(route==='session/bind'&&options.onBindingPost)await options.onBindingPost(body);
     if(options.failRoute===route||options.failRoute===routePath)return {ok:false,json:async()=>({ok:false,error:options.error||'连接失败'})};
     if(route==='capability-status')return {ok:true,json:async()=>({ok:true,session:{bound:true,live:false},pet:{enabled:true,note:'接口受理不代表气泡已显示'},speech:{enabled:false,note:'音色未核验'},video:{enabled:true,probeRegistered:false,storyboardRegistered:false,note:'尚未核验',...options.videoStatus},rss:{enabled:false,note:'尚未填写订阅源'}})};
-    if(body===undefined&&route==='integrations')return {ok:true,json:async()=>structuredClone(options.integrations||{ok:true,settings:{rssEnabled:false,videoEnabled:false,rssFeedLines:'',feedCount:0},presentation:{settings:{enabled:false,mode:'pet',petId:'',surface:'desktop',speak:false,animation:''}},video:{installed:false,note:'合成预览中没有视频依赖'}})};
+    if(body===undefined&&route==='integrations'){const value=structuredClone({mainSessionId:responseSession,...(options.integrations||{ok:true,settings:{rssEnabled:false,videoEnabled:false,rssFeedLines:'',feedCount:0},presentation:{settings:{enabled:false,mode:'pet',petId:'',surface:'desktop',speak:false,animation:''}},video:{installed:false,note:'合成预览中没有视频依赖'}})});if(options.onIntegrationsGet)await options.onIntegrationsGet();return {ok:true,json:async()=>value};}
     if(route==='integrations'&&body!==undefined)return {ok:true,json:async()=>({ok:true,settings:body,note:'能力已保存'})};
     if(route==='presentation')return {ok:true,json:async()=>({ok:true,settings:body,note:'表达已保存'})};
     if(route==='bilibili/candidates/refresh')return {ok:true,json:async()=>({ok:true,mainSessionId:responseSession,items:[{bvid:'BV1GJ411x7h7',title:'合成热门视频',author:'合成作者',snippet:'公开摘要'}],fetchedAt:123,note:'仅为公开候选，不代表已阅读或观看。'})};
@@ -330,6 +330,14 @@ test('optional companion settings load explicitly and stay in nested feature tab
   selectTab(ui,'persona');selectTab(ui,'settings');assert.equal(ui.getModel().capabilityPage,'rss');assert.equal(namedField(ui.render(),'公开 RSS 来源，每行一个').props.value,'Stories | https://example.com/rss.xml');
   assert.equal(ui.requests.filter(r=>r.method==='POST').length,0);await ui.click('保存视频与 RSS 设置');
   assert.deepEqual(ui.requests.find(r=>r.route==='integrations'&&r.method==='POST').body,{rssEnabled:false,videoEnabled:false,rssFeedLines:'Stories | https://example.com/rss.xml'});
+});
+
+test('expression diagnostics never cross sessions or accept late refresh while preserving drafts',async()=>{
+  let unblock,hold=false;const wait=new Promise(resolve=>{unblock=resolve;});
+  const ui=harness({remote:{sessionId:'main-a'},integrations:{ok:true,settings:{rssEnabled:false,videoEnabled:false,rssFeedLines:''},presentation:{settings:{enabled:true,mode:'pet',petId:'pet-a',surface:'web',speak:false,animation:''},diagnostics:{reply:{code:'accepted',note:'旧会话受理'}}},video:{}},onIntegrationsGet:async()=>{if(hold)await wait;}});
+  await ui.mount();selectTab(ui,'settings');await ui.click('读取陪伴能力设置');assert.match(flatten(ui.render()),/旧会话受理/);ui.change('桌宠 ID','draft-pet');
+  hold=true;const pending=ui.click('刷新表达结果');await new Promise(resolve=>setImmediate(resolve));ui.server.remote.sessionId='main-b';await ui.poll();assert.doesNotMatch(flatten(ui.render()),/旧会话受理/);assert.equal(ui.getModel().presentationDraft.petId,'draft-pet');
+  unblock();await pending;assert.doesNotMatch(flatten(ui.render()),/旧会话受理/);assert.equal(ui.getModel().presentationDraft.petId,'draft-pet');
 });
 
 test('pet presentation and browser speech can be independently enabled without automatic playback',async()=>{
