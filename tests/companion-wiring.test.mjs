@@ -7,13 +7,14 @@ import {Readable} from 'node:stream';
 import plugin from '../lib/index.js';
 import {Store} from '../lib/store.js';
 import {CompanionStore} from '../lib/companion-store.js';
+import {ExperienceStore} from '../lib/experience-store.js';
 
-function fixture(t,{fetchImpl}={}){
+function fixture(t,{fetchImpl,speechService}={}){
   const home=fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-companion-wiring-')),previous=process.env.DSH_HOME;process.env.DSH_HOME=home;
   const store=new Store();store.saveState({...store.state(),sessionId:'synthetic-main'});
   const companion=new CompanionStore(store),tools=new Map(),routes=new Map(),listeners=new Map(),effects=[],requests=[],guards=[];
   const main={id:'synthetic-main-agent',session:{id:'synthetic-main'},status:'idle'},outside={id:'synthetic-outside',session:{id:'synthetic-outside'}};
-  const services={sessions:{get:id=>({id})},agents:{list:()=>[main,outside],isOwnedBy:()=>false}};
+  const services={sessions:{get:id=>({id})},agents:{list:()=>[main,outside],isOwnedBy:()=>false},...(speechService?{speechToText:speechService}:{})};
   const emit=(name,...args)=>{for(const handler of listeners.get(name)||[])handler(...args);};
   const ctx={
     sessionController:{create:async()=>{throw Error('Should reuse the main conversation');},prompt:async request=>{requests.push(request);emit('session/event',main.session,{type:'user/message',time:Date.now(),data:{id:'program-'+requests.length,source:{kind:'user',rpcId:request.requestId},content:request.content}});}},
@@ -60,6 +61,44 @@ test('exploration settings routes validate local requests and do not start work 
   await assert.rejects(()=>f.tools.get('assistant_explore').execute({action:'status'},{agent:f.outside,signal:new AbortController().signal}),/专用/);
 });
 
+test('settings manage only current main session exploration interests',async t=>{
+  const f=fixture(t),experience=new ExperienceStore(f.store),now=Date.now();
+  const make=(id,mainSessionId)=>experience.record({id,runId:id,mainSessionId,title:'Synthetic topic',question:'Synthetic question',thought:'Synthetic thought',reason:'Synthetic reason',sources:[{id:'source-'+id,platform:'bilibili',operation:'read',reference:'BV1GJ411x7h7',url:'https://www.bilibili.com/video/BV1GJ411x7h7/',title:'Synthetic',excerpt:'Synthetic',scope:'metadata',truncated:false,readAt:now}],origin:'fish'}).interest;
+  const own=make('own','synthetic-main'),other=make('other','synthetic-other');
+  assert.deepEqual((await f.http('/my-fish/api','GET','exploration')).body.interests.map(x=>x.id),[own.id]);
+  assert.equal((await f.http('/my-fish/api','POST','exploration/interest',{id:other.id,action:'pause'})).status,400);
+  assert.equal((await f.http('/my-fish/api','POST','exploration/interest',{id:own.id,action:'pause'},{origin:'https://outside.invalid'})).status,403);
+  assert.equal((await f.http('/my-fish/api','POST','exploration/interest',{id:own.id,action:'pause'})).body.interest.status,'paused');
+  assert.equal((await f.http('/my-fish/api','POST','exploration/interest',{id:own.id,action:'resume'})).body.interest.status,'active');
+  assert.equal((await f.http('/my-fish/api','POST','exploration/interest',{id:own.id,action:'forget'})).status,200);
+  assert.deepEqual(experience.interests('synthetic-main'),[]);assert.equal(experience.interests('synthetic-other').length,1);
+});
+
+test('explicitly linked interests synchronize actions and reject single-sided edits',async t=>{
+  const f=fixture(t),thread=(await f.run({action:'start',title:'Synthetic topic',openQuestion:'Question?'})).thread;
+  const experience=new ExperienceStore(f.store).record({id:'episode-own',runId:'run-own',mainSessionId:'synthetic-main',title:'Synthetic topic',question:'Question?',thought:'Thought',reason:'Reason',sources:[{id:'synthetic-source',platform:'bilibili',operation:'read',reference:'BV1GJ411x7h7',url:'https://www.bilibili.com/video/BV1GJ411x7h7/',title:'Synthetic',excerpt:'Synthetic',scope:'metadata',truncated:false,readAt:Date.now()}],origin:'fish'}).interest;
+  const pair={threadId:thread.id,interestId:experience.id};
+  assert.equal((await f.http('/my-fish/api','POST','interest-links',{...pair,action:'link'},{origin:'https://outside.invalid'})).status,403);
+  assert.equal((await f.http('/my-fish/api','POST','interest-links',{...pair,action:'link'})).body.ok,true);
+  assert.equal((await f.http('/my-fish/api','POST','companion/topic',{id:thread.id,status:'paused'})).status,400);
+  assert.equal((await f.http('/my-fish/api','POST','exploration/interest',{id:experience.id,action:'pause'})).status,400);
+  await assert.rejects(()=>f.run({action:'pause',id:thread.id}),/统一兴趣/);
+  assert.equal((await f.http('/my-fish/api','POST','interest-links',{...pair,action:'pause',requestId:'pause-synthetic'})).body.ok,true);
+  assert.equal(f.companion.snapshot().threads[0].status,'paused');assert.equal(new ExperienceStore(f.store).interests('synthetic-main')[0].status,'paused');
+  assert.equal((await f.http('/my-fish/api','POST','interest-links',{...pair,action:'forget',requestId:'forget-synthetic'})).body.ok,true);
+  assert.equal((await f.http('/my-fish/api','POST','interest-links',{...pair,action:'forget',requestId:'forget-synthetic'})).body.deduplicated,true);
+  const result=(await f.http('/my-fish/api','GET','interest-links')).body;assert.equal(result.mainSessionId,'synthetic-main');assert.equal(result.completed.at(-1).requestId,'forget-synthetic');assert.equal(result.completed.at(-1).action,'forget');
+  assert.equal(f.companion.snapshot().threads.length,0);assert.equal(new ExperienceStore(f.store).interests('synthetic-main').length,0);
+});
+
+test('stale association appears in trusted diagnostics and can be unlinked without deleting remaining interest',async t=>{
+  const f=fixture(t),thread=(await f.run({action:'start',title:'Synthetic topic',openQuestion:'Question?'})).thread;
+  const store=new ExperienceStore(f.store),interest=store.record({id:'stale-episode',runId:'stale-run',mainSessionId:'synthetic-main',title:'Synthetic',question:'Question?',thought:'Thought',reason:'Reason',sources:[{id:'stale-source',platform:'bilibili',operation:'read',reference:'BV1GJ411x7h7',url:'https://www.bilibili.com/video/BV1GJ411x7h7/',title:'Synthetic',excerpt:'Synthetic',scope:'metadata',truncated:false,readAt:Date.now()}],origin:'fish'}).interest;
+  const pair={threadId:thread.id,interestId:interest.id};assert.equal((await f.http('/my-fish/api','POST','interest-links',{action:'link',...pair})).body.ok,true);
+  f.companion.forget(thread.id);const list=(await f.http('/my-fish/api','GET','interest-links')).body.links;assert.equal(list.length,1);assert.equal(list[0].threadMissing,true);assert.equal(list[0].interestMissing,false);
+  assert.equal((await f.http('/my-fish/api','POST','interest-links',{action:'unlink',...pair})).body.ok,true);assert.equal(store.interests('synthetic-main').length,1);
+});
+
 test('companion optional settings are local, strict and initially disabled without network or installation',async t=>{
   const f=fixture(t);const original=JSON.stringify(f.store.state());
   for(const prefix of ['/my-fish/api','/x-whale/api']){
@@ -72,6 +111,18 @@ test('companion optional settings are local, strict and initially disabled witho
   }
   assert.equal(JSON.stringify(f.store.state()),original);assert.equal(f.requests.length,0);
   const video=f.tools.get('assistant_video');await assert.rejects(()=>video.execute({reference:'BV1GJ411x7h7'},{agent:f.outside,signal:new AbortController().signal}),/专用/);
+});
+
+test('capability status remains a read-only local diagnostic and does not claim a model test',async t=>{
+  const f=fixture(t),before=JSON.stringify(f.store.state());
+  const result=await f.http('/my-fish/api','GET','capability-status');assert.equal(result.status,200);assert.equal(result.body.session.bound,true);assert.equal(result.body.video.enabled,false);assert.match(result.body.video.note,/不代表/);
+  assert.equal((await f.http('/my-fish/api','GET','capability-status',undefined,{origin:'https://outside.invalid'})).status,403);
+  assert.equal(JSON.stringify(f.store.state()),before);assert.equal(f.requests.length,0);
+});
+
+test('speech interface diagnostic inspects method presence without starting speech or reading settings',async t=>{
+  let calls=0;const f=fixture(t,{speechService:{resolve:()=>{calls++;throw Error('must not run');},transcribe:()=>{calls++;throw Error('must not run');}}});
+  const result=await f.http('/my-fish/api','GET','capability-status');assert.equal(result.body.video.hostSpeechInterface,true);assert.equal(calls,0);
 });
 
 test('trusted settings cancel only the current main-session game and restore guarded tools',async t=>{

@@ -27,6 +27,11 @@ experiences.json
 exploration.json
 integrations.json
 presentation.json
+presentation-archive.json
+exploration-openings-archive.json
+interest-links.json
+interest-operation.json
+interest-completed-archive.json
 config.json
 state.json
 my-fish-location.json

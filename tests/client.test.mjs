@@ -22,19 +22,24 @@ function harness(options={}){
   data.sessionBinding={ok:true,available:true,requiresBinding:false,current:data.remote.sessionId?{sessionId:data.remote.sessionId}:null,workspaces:[],selectedWorkspaceId:null,candidates:[],...options.sessionBinding};
   if(options.config)Object.assign(data.remote.config,options.config);
   const server=structuredClone(data),requests=[];
+  server.exploration=structuredClone(options.exploration||{ok:true,hidden:false,active:[],interests:[],experiences:{interests:[],episodes:[]}});
+  server.interestLinks=structuredClone(options.interestLinks||{ok:true,links:[],pending:null});
   const RuntimeDate=options.now===undefined?Date:class extends Date{constructor(...args){super(...(args.length?args:[options.now]));}static now(){return options.now;}};
   let model,plugin,effect,hasEffect=false,cleanup,intervalCallback,intervalDelay,clearedInterval,ref;
   const react={
     createElement:(type,props,...children)=>({type,props:props||{},children}),
-    useState:initial=>{model??=initial;return [model,next=>{model=typeof next==='function'?next(model):next;}];},
+    useState:initial=>{model??=initial;return [model,next=>{if(typeof next==='function'){const before=model;if(options.strictUpdater)next(before);model=next(before);}else model=next;}];},
     useRef:initial=>{ref??={current:initial};return ref;},
     useEffect:fn=>{if(!hasEffect){hasEffect=true;effect=fn;}}
   };
   async function request(url,opts={}){
     assert.ok(url.startsWith('/my-fish/api/'),'only local plugin routes');
     const route=url.slice('/my-fish/api/'.length),body=opts.body?JSON.parse(opts.body):undefined;
+    const responseSession=server.remote.sessionId??null;
+    const responseCompanion=route==='companion'&&body===undefined?structuredClone({...server.companion,mainSessionId:responseSession}):null;
     const [routePath,query='']=route.split('?'),bindingWorkspaceId=new URL('http://localhost/?'+query).searchParams.get('workspaceId')||'';
     requests.push({route,method:opts.method||'GET',body});
+    if(route==='state'&&body===undefined&&options.onStateGet)await options.onStateGet();
     if(route==='channels'&&options.onChannelsGet)await options.onChannelsGet();
     if(route==='assistant'&&body===undefined&&options.onAssistantGet)await options.onAssistantGet();
     if(route==='channels/check'&&options.onChannelCheck)await options.onChannelCheck(body);
@@ -44,6 +49,7 @@ function harness(options={}){
     if(routePath==='session-binding'&&options.onBindingGet)await options.onBindingGet(bindingWorkspaceId);
     if(route==='session/bind'&&options.onBindingPost)await options.onBindingPost(body);
     if(options.failRoute===route||options.failRoute===routePath)return {ok:false,json:async()=>({ok:false,error:options.error||'连接失败'})};
+    if(route==='capability-status')return {ok:true,json:async()=>({ok:true,session:{bound:true,live:false},pet:{enabled:true,note:'接口受理不代表气泡已显示'},speech:{enabled:false,note:'音色未核验'},video:{enabled:true,probeRegistered:false,storyboardRegistered:false,note:'尚未核验',...options.videoStatus},rss:{enabled:false,note:'尚未填写订阅源'}})};
     if(body===undefined&&route==='integrations')return {ok:true,json:async()=>structuredClone(options.integrations||{ok:true,settings:{rssEnabled:false,videoEnabled:false,rssFeedLines:'',feedCount:0},presentation:{settings:{enabled:false,mode:'pet',petId:'',surface:'desktop',speak:false,animation:''}},video:{installed:false,note:'合成预览中没有视频依赖'}})};
     if(route==='integrations'&&body!==undefined)return {ok:true,json:async()=>({ok:true,settings:body,note:'能力已保存'})};
     if(route==='presentation')return {ok:true,json:async()=>({ok:true,settings:body,note:'表达已保存'})};
@@ -53,8 +59,24 @@ function harness(options={}){
       if(bindingWorkspaceId){value.selectedWorkspaceId=bindingWorkspaceId;if(options.bindingCandidatesByGroup)value.candidates=structuredClone(options.bindingCandidatesByGroup[bindingWorkspaceId]||[]);}
       return {ok:true,json:async()=>value};
     }
-    if(body===undefined&&route==='exploration')return {ok:true,json:async()=>structuredClone(options.exploration||{ok:true,hidden:false,active:[],experiences:{interests:[],episodes:[]}})};
-    if(body===undefined)return {ok:true,json:async()=>structuredClone(route==='state'?server.remote:route==='plans'?server.plans:route==='permissions'?server.permissions:route==='workspace'?server.workspace:route==='channels'?server.channels:route==='companion'?server.companion:server.assistant)};
+    if(body===undefined&&route==='exploration'){const value=structuredClone({...server.exploration,mainSessionId:options.explorationSessionOverride??responseSession});if(options.onExplorationGet)await options.onExplorationGet();return {ok:true,json:async()=>value};}
+    if(route==='interest-links'){
+      if(body!==undefined){
+        const expected=['pause','resume','forget'].includes(body.action)?'action,interestId,requestId,threadId':'action,interestId,threadId';
+        if(Object.keys(body).sort().join(',')!==expected)return {ok:false,json:async()=>({ok:false,error:'兴趣关联操作字段无效'})};
+        if(options.onInterestOperation){const result=await options.onInterestOperation(body,server);if(result)return {ok:true,json:async()=>result};}
+        if(body.action==='link')server.interestLinks.links.push({mainSessionId:server.remote.sessionId,threadId:body.threadId,interestId:body.interestId,at:1});
+        if(body.action==='unlink'||body.action==='forget')server.interestLinks.links=server.interestLinks.links.filter(row=>row.threadId!==body.threadId||row.interestId!==body.interestId);
+        server.interestLinks.pending=null;
+      }
+      const value=structuredClone({...server.interestLinks,mainSessionId:responseSession});if(body===undefined&&options.onInterestLinksGet)await options.onInterestLinksGet();return {ok:true,json:async()=>value};
+    }
+    if(route==='exploration/interest'){
+      if(body.action==='forget')server.exploration.interests=server.exploration.interests.filter(row=>row.id!==body.id);
+      else server.exploration.interests=server.exploration.interests.map(row=>row.id===body.id?{...row,status:body.action==='pause'?'paused':'active'}:row);
+      return {ok:true,json:async()=>({ok:true})};
+    }
+    if(body===undefined)return {ok:true,json:async()=>structuredClone(route==='state'?server.remote:route==='plans'?server.plans:route==='permissions'?server.permissions:route==='workspace'?server.workspace:route==='channels'?server.channels:route==='companion'?responseCompanion:server.assistant)};
     if(route==='exploration/start'||route==='exploration/cancel')return {ok:true,json:async()=>({ok:true,note:route==='exploration/start'?'已开始逛公开内容':'已停止等待，不会重发'})};
     if(route==='session/bind'){
       const result=options.bindingResult||{ok:true,sessionId:body.sessionId,note:'已固定使用已有会话，没有创建聊天或发送消息。'};
@@ -111,6 +133,7 @@ function harness(options={}){
     render,requests,server,getModel:()=>model,
     setModel:changes=>{model={...model,...changes};},
     async mount(){cleanup=effect();await new Promise(resolve=>setImmediate(resolve));return render();},
+    async remount(){cleanup?.();model=undefined;ref=undefined;hasEffect=false;render();cleanup=effect();await new Promise(resolve=>setImmediate(resolve));return render();},
     async poll(){await intervalCallback();return render();},
     unmount(){cleanup?.();},getInterval:()=>({delay:intervalDelay,cleared:clearedInterval}),
     change(label,value,checked){namedField(render(),label).props.onChange({target:{value,checked}});return render();},
@@ -143,8 +166,14 @@ test('mount loads the personal layer and X status independently without external
   const ui=harness({loaded:false});
   assert.match(flatten(ui.render()),/正在读取个人助理/);
   await ui.mount();
-  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['state','GET'],['assistant','GET'],['plans','GET'],['permissions','GET'],['workspace','GET'],['channels','GET'],['companion','GET'],['session-binding','GET']]);
+  assert.deepEqual(ui.requests.map(row=>[row.route,row.method]),[['state','GET'],['assistant','GET'],['plans','GET'],['permissions','GET'],['workspace','GET'],['channels','GET'],['session-binding','GET'],['companion','GET']]);
   assert.match(flatten(ui.render()),/My Fish/);
+});
+
+test('initial companion read starts after the session is known, without waiting for another poll',async()=>{
+  let release;const gate=new Promise(resolve=>{release=resolve;}),ui=harness({loaded:false,remote:{sessionId:'companion-main'},companion:companionFixture(),onStateGet:()=>gate});
+  await ui.mount();assert.equal(ui.requests.some(row=>row.route==='companion'),false);release();await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ui.getModel().remote.sessionId,'companion-main');assert.equal(ui.getModel().companion.threads.length,1);assert.equal(ui.requests.filter(row=>row.route==='companion').length,1);
 });
 
 test('manual wake works without X identity and sends the one-time task instead of plan keywords',async()=>{
@@ -336,7 +365,7 @@ test('companion actions protect every existing draft and preserve an unfinished 
     const ui=harness({companion:companionFixture()});ui.change(label,value);assert.equal(namedButton(companionCard(ui.render()),'接着聊').props.disabled,true,label);assert.equal(namedButton(ui.render(),'随便逛逛，回来聊').props.disabled,true,label);
     ui.change('想一起聊的B站链接','BV1GJ411x7h7');assert.equal(namedButton(ui.render(),'聊这个').props.disabled,true,label);assert.equal(ui.requests.length,0);
   }
-  const ui=harness({companion:companionFixture(),remote:{sessionId:'main'},props:{openAssistantSession:()=>{},close:()=>{}}});ui.change('想一起聊的B站链接','BV1GJ411x7h7');assert.equal(namedButton(ui.render(),'和助理聊天').props.disabled,true);assert.equal(namedButton(companionCard(ui.render()),'接着聊').props.disabled,true);assert.equal(namedButton(ui.render(),'聊这个').props.disabled,false);
+  const ui=harness({companion:companionFixture(),remote:{sessionId:'main'},props:{openAssistantSession:()=>{},close:()=>{}}});ui.change('想一起聊的B站链接','BV1GJ411x7h7');assert.equal(namedButton(ui.render(),'和助理聊天').props.disabled,false);assert.equal(namedButton(companionCard(ui.render()),'接着聊').props.disabled,true);assert.equal(namedButton(ui.render(),'聊这个').props.disabled,false);
 });
 
 test('Bilibili companion input normalizes only strict video references and never forwards tracking',async()=>{
@@ -363,6 +392,16 @@ test('public exploration controls use local routes and keep the main conversatio
   await ui.click('停止探索或结束等待');assert.equal(ui.requests.some(r=>r.route==='exploration/cancel'),true);
   await ui.click('看看最近的经历');assert.match(flatten(ui.render()),/还没有已保存的阅读经历/);
   assert.equal(ui.requests.some(r=>r.route==='session'||r.route==='session/bind'||r.route==='companion/chat'),false);
+});
+
+test('exploration interests can be paused, resumed and explicitly forgotten without changing chat topics',async()=>{
+  const exploration={ok:true,active:[],interests:[{id:'explore-1',title:'合成兴趣',status:'active',currentThought:'合成想法'}],experiences:{interests:[],episodes:[]}},ui=harness({exploration});
+  await ui.click('看看最近的经历');assert.match(flatten(ui.render()),/聊天话题单独管理/);
+  await ui.click('暂停探索：合成兴趣');assert.deepEqual(ui.requests.find(r=>r.route==='exploration/interest').body,{id:'explore-1',action:'pause'});assert.match(flatten(ui.render()),/已暂停/);
+  await ui.click('恢复探索：合成兴趣');assert.deepEqual(ui.requests.filter(r=>r.route==='exploration/interest').at(-1).body,{id:'explore-1',action:'resume'});
+  await ui.click('忘记探索兴趣：合成兴趣');assert.equal(ui.requests.filter(r=>r.route==='exploration/interest').length,2);
+  await ui.click('确认忘记探索兴趣：合成兴趣');assert.deepEqual(ui.requests.filter(r=>r.route==='exploration/interest').at(-1).body,{id:'explore-1',action:'forget'});assert.match(flatten(ui.render()),/还没有自主探索兴趣/);
+  assert.equal(ui.requests.some(r=>r.route==='companion/topic'||r.route==='companion/forget'),false);
 });
 
 test('unknown companion outcomes retry with the same request key and leave the reference draft intact',async()=>{
@@ -594,7 +633,7 @@ test('an unfinished expiry choice protects navigation even before memory text is
   const ui=harness({remote:{sessionId:'synthetic-main'},props:{openAssistantSession:async()=>{},close:()=>{}}});
   assert.equal(namedButton(ui.render(),'和助理聊天').props.disabled,false);
   ui.change('记忆有效期','custom');
-  assert.equal(namedButton(ui.render(),'和助理聊天').props.disabled,true);
+  assert.equal(namedButton(ui.render(),'和助理聊天').props.disabled,false);
 });
 
 test('goal pause and completion update status without overwriting its details or check time',async()=>{
@@ -739,13 +778,138 @@ test('chat is disabled without an existing session, navigation or settings close
   assert.match(flatten(noSession.render()),/建立聊天会话后即可进入/);assert.match(flatten(noService.render()),/导航服务暂未就绪/);assert.deepEqual(calls,[]);
 });
 
-test('chat protects settings and unfinished task, memory and goal drafts from being discarded',()=>{
+test('chat protects unsaved configuration and retains ordinary drafts for navigation',()=>{
   for(const [label,value] of [['角色名','尚未保存'],['本次任务（可选）','临时任务'],['记忆内容','尚未保存的记忆'],['目标','尚未添加的目标']]){
     const calls=[],ui=harness({remote:{sessionId:'existing'},props:{openAssistantSession:id=>calls.push(id),close:()=>calls.push('close')}});
     ui.change(label,value);
-    const button=namedButton(ui.render(),'和助理聊天');assert.equal(button.props.disabled,true);button.props.onClick();
-    assert.deepEqual(calls,[]);assert.match(flatten(ui.render()),/先保存或清空/);
+    const button=namedButton(ui.render(),'和助理聊天');assert.equal(button.props.disabled,label==='角色名');
   }
+});
+
+test('navigation drafts survive unmount and repeated React updaters only for the matching session and workspace',async()=>{
+  const calls=[],ui=harness({strictUpdater:true,remote:{sessionId:'existing'},props:{openAssistantSession:id=>calls.push(id),close:()=>calls.push('close')}});
+  ui.change('本次任务（可选）','合成未发送任务');ui.change('记忆内容','合成记忆');ui.change('想一起聊的B站链接','BV1GJ411x7h7');
+  await ui.click('和助理聊天');assert.deepEqual(calls,['existing','close']);
+  ui.server.remote.sessionId='different';await ui.remount();assert.equal(namedField(ui.render(),'本次任务（可选）').props.value,'');assert.match(flatten(ui.render()),/其他会话或工作区有临时草稿/);
+  ui.server.remote.sessionId='existing';await ui.remount();assert.equal(namedField(ui.render(),'本次任务（可选）').props.value,'合成未发送任务');assert.equal(namedField(ui.render(),'记忆内容').props.value,'合成记忆');assert.equal(namedField(ui.render(),'想一起聊的B站链接').props.value,'BV1GJ411x7h7');
+});
+
+test('capability status is explicit and distinguishes unknown from absence',async()=>{
+  const ui=harness();assert.equal(ui.requests.length,0);await ui.click('查看能力状态');const value=flatten(ui.render());
+  assert.match(value,/当前未见活跃实例/);assert.match(value,/工具尚未核验/);assert.match(value,/接口受理不代表气泡已显示/);assert.equal(ui.requests.filter(r=>r.route==='capability-status').length,1);
+});
+
+test('video audio status distinguishes observed interface from unverified video use',async()=>{
+  for(const [state,expected] of [[true,/My Fish 检测到宿主语音接口；视频插件能否使用、服务是否就绪和转写结果尚未确认/],[false,/My Fish 暂未检测到宿主语音接口；这不代表语音功能未安装/],[null,/宿主语音接口状态尚未确认/]]){
+    const ui=harness({videoStatus:{hostSpeechInterface:state}});await ui.click('查看能力状态');const text=flatten(ui.render());assert.match(text,expected);assert.match(text,/视频会尝试现有字幕/);assert.match(text,/语音输入.*检查官方听写服务/);assert.equal(ui.requests.filter(r=>r.method==='POST').length,0);
+  }
+});
+
+test('unified interests require explicit selection, confirmation, and retain both sides on unlink',async()=>{
+  const companion=companionFixture(),thread=companion.threads[0],interest={id:'explore-one',title:'探索火山',status:'active',currentThought:'想了解'};
+  const ui=harness({remote:{sessionId:'companion-main'},companion,exploration:{ok:true,active:[],interests:[interest],experiences:{episodes:[]}}});
+  await ui.click('读取兴趣管理');assert.equal(ui.requests.some(r=>r.route==='interest-links'&&r.method==='POST'),false);
+  ui.change('选择聊天话题',thread.id);ui.change('选择探索兴趣',interest.id);await ui.click('关联所选兴趣');
+  assert.deepEqual(ui.requests.find(r=>r.route==='interest-links'&&r.method==='POST').body,{action:'link',threadId:thread.id,interestId:interest.id});
+  await ui.click('一起忘记：'+thread.title);assert.equal(ui.requests.filter(r=>r.route==='interest-links'&&r.method==='POST').length,1);
+  await ui.click('取消一起忘记：'+thread.title);await ui.click('解除关联：'+thread.title);assert.equal(ui.server.companion.threads.length,1);assert.equal(ui.server.exploration.interests.length,1);
+  await ui.click('关联所选兴趣');await ui.click('一起忘记：'+thread.title);await ui.click('确认一起忘记：'+thread.title);assert.equal(ui.requests.filter(r=>r.route==='interest-links'&&r.method==='POST').at(-1).body.action,'forget');
+});
+
+test('partially completed unified interest action is displayed and retried explicitly',async()=>{
+  const companion=companionFixture(),thread=companion.threads[0],interest={id:'explore-one',title:'探索火山',status:'active'},link={mainSessionId:'companion-main',threadId:thread.id,interestId:interest.id,at:1};let first=true;
+  const ui=harness({remote:{sessionId:'companion-main'},companion,exploration:{ok:true,active:[],interests:[interest],experiences:{episodes:[]}},interestLinks:{ok:true,links:[link],pending:null},onInterestOperation:(body,server)=>{if(first&&body.action==='pause'){first=false;server.interestLinks.pending={...link,action:'pause',threadDone:true,interestDone:false};delete server.interestLinks.pending.at;return {ok:false,pending:true,error:'未完成'};}}});
+  await ui.click('读取兴趣管理');await ui.click('一起暂停：'+thread.title);assert.match(flatten(ui.render()),/上次兴趣操作尚未完成/);
+  await ui.click('重试未完成的兴趣操作');assert.equal(ui.server.interestLinks.pending,null);const posts=ui.requests.filter(r=>r.route==='interest-links'&&r.method==='POST');assert.equal(posts.length,2);assert.ok(posts[0].body.requestId);assert.equal(posts[0].body.requestId,posts[1].body.requestId);
+});
+
+test('lost response after completed forget retains the same request and shows the replay receipt',async()=>{
+  const companion=companionFixture(),thread=companion.threads[0],interest={id:'explore-one',title:'探索火山',status:'active'},link={mainSessionId:'companion-main',threadId:thread.id,interestId:interest.id,at:1};let first=true,requestId;
+  const ui=harness({remote:{sessionId:'companion-main'},companion,exploration:{ok:true,active:[],interests:[interest],experiences:{episodes:[]}},interestLinks:{ok:true,links:[link],pending:null},onInterestOperation:(body,server)=>{if(body.action==='forget'&&first){first=false;requestId=body.requestId;server.interestLinks.links=[];throw Error('synthetic lost response');}if(body.action==='forget'){assert.equal(body.requestId,requestId);return {ok:true,deduplicated:true,note:'该请求此前已完成；当前状态请刷新核对。'};}}});
+  await ui.click('读取兴趣管理');await ui.click('一起忘记：'+thread.title);await ui.click('确认一起忘记：'+thread.title);assert.match(flatten(ui.render()),/上次兴趣操作结果尚未确认/);
+  await ui.click('核对上次兴趣操作');assert.match(flatten(ui.render()),/该请求此前已完成/);assert.equal(ui.requests.filter(r=>r.route==='interest-links'&&r.method==='POST').length,2);
+});
+
+test('confirmed interest success with failed refresh stays success and blocks stale mutations',async()=>{
+  const companion=companionFixture(),thread=companion.threads[0],interest={id:'explore-one',title:'探索火山',status:'active'},link={mainSessionId:'companion-main',threadId:thread.id,interestId:interest.id,at:1};
+  const options={remote:{sessionId:'companion-main'},companion,exploration:{ok:true,active:[],interests:[interest],experiences:{episodes:[]}},interestLinks:{ok:true,links:[link],pending:null}};
+  options.onInterestOperation=()=>{options.failRoute='interest-links';return {ok:true};};const ui=harness(options);
+  await ui.click('读取兴趣管理');await ui.click('一起暂停：'+thread.title);assert.match(flatten(ui.render()),/操作已完成。 状态刷新失败/);assert.equal(namedButton(ui.render(),'一起暂停：'+thread.title).props.disabled,true);assert.equal(ui.requests.filter(r=>r.route==='interest-links'&&r.method==='POST').length,1);
+  options.failRoute=null;await ui.click('读取兴趣管理');assert.equal(namedButton(ui.render(),'一起暂停：'+thread.title).props.disabled,false);
+});
+
+test('failed interest action retains its original error when follow-up refresh also fails',async()=>{
+  const companion=companionFixture(),thread=companion.threads[0],interest={id:'explore-one',title:'探索火山',status:'active'},link={mainSessionId:'companion-main',threadId:thread.id,interestId:interest.id,at:1};
+  const options={remote:{sessionId:'companion-main'},companion,exploration:{ok:true,active:[],interests:[interest],experiences:{episodes:[]}},interestLinks:{ok:true,links:[link],pending:null}};
+  options.onInterestOperation=()=>{options.failRoute='interest-links';return {ok:false,error:'操作原始失败'};};const ui=harness(options);
+  await ui.click('读取兴趣管理');await ui.click('一起暂停：'+thread.title);assert.match(flatten(ui.render()),/操作原始失败/);assert.match(flatten(ui.render()),/状态刷新失败/);assert.match(flatten(ui.render()),/上次兴趣操作结果尚未确认/);assert.equal(ui.requests.filter(r=>r.route==='interest-links'&&r.method==='POST').length,1);
+});
+
+test('a link with a missing endpoint can be unlinked without permitting a combined mutation',async()=>{
+  const link={mainSessionId:'main',threadId:'missing-thread',interestId:'explore-one',at:1,threadMissing:true,interestMissing:false};
+  const ui=harness({remote:{sessionId:'main'},exploration:{ok:true,active:[],interests:[{id:'explore-one',title:'合成',status:'active'}],experiences:{episodes:[]}},interestLinks:{ok:true,links:[link],pending:null}});
+  await ui.click('读取兴趣管理');assert.match(flatten(ui.render()),/关联的一侧已不存在/);assert.equal(namedButton(ui.render(),'一起暂停：这条兴趣').props.disabled,true);await ui.click('解除关联：这条兴趣');assert.deepEqual(ui.server.interestLinks.links,[]);
+});
+
+test('pending requests resume with the persisted requestId after reopening the page',async()=>{
+  const companion=companionFixture(),thread=companion.threads[0],interest={id:'explore-one',title:'探索火山',status:'active'};
+  const pending={mainSessionId:'companion-main',threadId:thread.id,interestId:interest.id,action:'pause',requestId:'previous-request',threadDone:true,interestDone:false};
+  const ui=harness({remote:{sessionId:'companion-main'},companion,exploration:{ok:true,active:[],interests:[interest],experiences:{episodes:[]}},interestLinks:{ok:true,links:[],pending}});
+  await ui.click('读取兴趣管理');await ui.click('重试未完成的兴趣操作');assert.equal(ui.requests.find(r=>r.method==='POST'&&r.route==='interest-links').body.requestId,'previous-request');
+});
+
+test('completed interest receipts remain reviewable without implying current state or offering replay',async()=>{
+  const companion=companionFixture(),thread=companion.threads[0],interest={id:'explore-one',title:'探索火山',status:'active'};
+  const completed=[{requestId:'r1',threadId:thread.id,interestId:interest.id,action:'pause'},{requestId:'r2',threadId:'gone',interestId:'gone',action:'forget'}];
+  const ui=harness({remote:{sessionId:'companion-main'},companion,exploration:{ok:true,active:[],interests:[interest],experiences:{episodes:[]}},interestLinks:{ok:true,links:[],pending:null,completed}});
+  await ui.click('读取兴趣管理');const tree=ui.render(),details=findAll(tree,n=>n.type==='details'&&n.children.some(child=>child?.type==='summary'&&flatten(child)==='最近完成操作'));const receipt=details[0];
+  assert.ok(receipt);assert.notEqual(receipt.props.open,true);const text=flatten(receipt);assert.match(text,/以下为完成回执，不代表当前状态/);assert.match(text,/暂停/);assert.match(text,/忘记/);assert.match(text,/已删除或不可见/);assert.equal(findAll(receipt,n=>n.type==='button').length,0);
+});
+
+test('delayed old interest responses cannot populate a newly bound session',async()=>{
+  let release,entered;const gate=new Promise(resolve=>{release=resolve;}),seen=new Promise(resolve=>{entered=resolve;}),companion=companionFixture(),thread=companion.threads[0],interest={id:'explore-one',title:'旧探索兴趣',status:'active'};
+  let block=true;const options={remote:{sessionId:'companion-main'},companion,exploration:{ok:true,active:[],interests:[interest],experiences:{episodes:[]}},interestLinks:{ok:true,links:[{mainSessionId:'companion-main',threadId:thread.id,interestId:interest.id,at:1}],pending:null},onInterestLinksGet:async()=>{if(block){block=false;entered();await gate;}}};
+  const ui=harness(options);await ui.mount();const old=ui.click('读取兴趣管理');await seen;
+  ui.server.remote.sessionId='new-main';ui.server.exploration={ok:true,active:[],interests:[],experiences:{episodes:[]}};ui.server.interestLinks={ok:true,links:[],pending:null};ui.server.companion={...ui.server.companion,threads:[]};await ui.poll();
+  release();await old;assert.equal(ui.getModel().remote.sessionId,'new-main');assert.equal(ui.getModel().interestLinks,null);assert.equal(ui.getModel().exploration,null);assert.equal(ui.getModel().companion.threads.length,0);assert.doesNotMatch(flatten(ui.render()),/旧探索兴趣/);
+});
+
+test('an old companion response cannot overwrite a newer snapshot after A to B to A',async()=>{
+  let release,entered;const gate=new Promise(resolve=>{release=resolve;}),seen=new Promise(resolve=>{entered=resolve;});let block=false;
+  const old=companionFixture(),options={remote:{sessionId:'companion-main'},companion:old,onCompanionGet:async()=>{if(block){block=false;entered();await gate;}}},ui=harness(options);
+  await ui.mount();await new Promise(resolve=>setImmediate(resolve));block=true;
+  const slow=ui.click('刷新最近话题');await seen;
+  ui.server.remote.sessionId='different';ui.server.companion={...ui.server.companion,threads:[]};await ui.poll();await new Promise(resolve=>setImmediate(resolve));
+  ui.server.remote.sessionId='companion-main';ui.server.companion=structuredClone(old);ui.server.companion.threads[0].title='新的合成话题';await ui.poll();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ui.getModel().companion.threads[0].title,'新的合成话题');release();await slow;assert.equal(ui.getModel().companion.threads[0].title,'新的合成话题');
+});
+
+test('overlapping same-session companion refreshes share one request and latest result wins',async()=>{
+  let release,entered;const gate=new Promise(resolve=>{release=resolve;}),seen=new Promise(resolve=>{entered=resolve;});let block=false;
+  const options={remote:{sessionId:'companion-main'},companion:companionFixture(),onCompanionGet:async()=>{if(block){block=false;entered();await gate;}}},ui=harness(options);
+  await ui.mount();await new Promise(resolve=>setImmediate(resolve));const before=ui.requests.filter(r=>r.route==='companion').length;block=true;
+  const slow=ui.click('刷新最近话题');await seen;await ui.poll();assert.equal(ui.requests.filter(r=>r.route==='companion').length,before+1);
+  release();await slow;await new Promise(resolve=>setImmediate(resolve));assert.equal(ui.getModel().companion.threads[0].title,companionFixture().threads[0].title);assert.equal(ui.getModel().companionLoading,false);
+});
+
+test('an old companion request cannot populate a remounted view',async()=>{
+  let release,entered;const gate=new Promise(resolve=>{release=resolve;}),seen=new Promise(resolve=>{entered=resolve;});let block=false;
+  const old=companionFixture(),options={remote:{sessionId:'companion-main'},companion:old,onCompanionGet:async()=>{if(block){block=false;entered();await gate;}}},ui=harness(options);
+  await ui.mount();await new Promise(resolve=>setImmediate(resolve));block=true;const slow=ui.click('刷新最近话题');await seen;
+  ui.server.companion=structuredClone(old);ui.server.companion.threads[0].title='重新打开后的合成话题';await ui.remount();await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ui.getModel().companion.threads[0].title,'重新打开后的合成话题');release();await slow;assert.equal(ui.getModel().companion.threads[0].title,'重新打开后的合成话题');
+});
+
+test('interest refresh refuses responses taken from different main sessions',async()=>{
+  const companion=companionFixture(),ui=harness({remote:{sessionId:'companion-main'},companion,explorationSessionOverride:'other-main'});
+  await ui.click('读取兴趣管理');assert.equal(ui.getModel().interestLinks,undefined);assert.match(flatten(ui.render()),/主会话已变化/);
+});
+
+test('conflicting legacy link can be unlinked without permitting a combined mutation',async()=>{
+  const companion=companionFixture(),thread=companion.threads[0],interest={id:'explore-one',title:'探索火山',status:'active'};
+  const link={mainSessionId:'companion-main',threadId:thread.id,interestId:interest.id,at:1,conflict:true};
+  const ui=harness({remote:{sessionId:'companion-main'},companion,exploration:{ok:true,active:[],interests:[interest],experiences:{episodes:[]}},interestLinks:{ok:true,links:[link],pending:null}});
+  await ui.click('读取兴趣管理');assert.match(flatten(ui.render()),/其他会话重复关联/);assert.equal(namedButton(ui.render(),'一起暂停：'+thread.title).props.disabled,true);await ui.click('解除关联：'+thread.title);assert.deepEqual(ui.server.interestLinks.links,[]);
 });
 
 test('chat navigation failure keeps settings open and shows the actual failure',async()=>{

@@ -22,6 +22,13 @@ function fixture(t){
   const report=receipt=>explore.report({runId:explore.active().id,quiet:false,share:true,title:'Synthetic interest',question:'Why does this work?',thought:'An actual synthetic observation',reason:'A concrete detail',nextQuestion:'What happens next?',receiptIds:[receipt.id]},exec('assistant_explore'));
   return {store,assistant,companion,experiences,explore,host,controller,main,started,cancelled,prompts,exec,read,report,advance:ms=>{now+=ms;},now:()=>now};
 }
+test('unfinished interest operation blocks discovery, evidence, reporting and opening',async t=>{
+  const f=fixture(t);await f.explore.start();const run=f.explore.active(),exec=f.exec('social_read',{platform:'bilibili',reference:BV});let pending={action:'pause'};f.explore.getInterestPending=()=>pending;
+  assert.match(f.explore.guard(exec),/兴趣操作尚未完成/);assert.equal(f.explore.preStep({agent:exec.agent}).kind,'reject');assert.deepEqual(f.explore.capture({exec}),[]);
+  assert.throws(()=>f.explore.report({runId:run.id,quiet:true,share:false,reason:'synthetic'},f.exec('assistant_explore')),/兴趣操作尚未完成/);
+  assert.match((await f.explore.deliver()).skipped,/兴趣操作尚未完成/);assert.match((await f.explore.start({manual:true})).skipped,/兴趣操作尚未完成/);assert.equal(f.prompts.length,0);
+  pending=null;assert.equal(f.explore.guard(exec),undefined);
+});
 test('background starts separately, preserves main identity and rejects duplicate active starts',async t=>{
   const f=fixture(t);await f.explore.start();assert.equal(f.started.length,1);assert.notEqual(f.started[0].sessionId,'main');assert.equal(f.store.state().sessionId,'main');assert.equal(f.prompts.length,0);assert.ok(f.explore.owns(f.exec('social_read')));
   await assert.rejects(f.explore.start(),/已有/);assert.equal(f.started.length,1);assert.equal(f.explore.preStep({agent:f.main}),undefined);
@@ -90,4 +97,24 @@ test('a claimed reply without a source mention is not falsely recorded as a spok
 
 test('plugin disposal requests cancellation and preserves an unconfirmed run for restart recovery',async t=>{
   const f=fixture(t);await f.explore.start();const id=f.explore.active().id;f.explore.dispose();assert.equal(f.cancelled.length,1);assert.equal(f.explore.state().runs.find(r=>r.id===id).status,'unknown');assert.ok(f.store.state().explorationActive);f.advance(180001);await f.explore.sweep();assert.equal(f.store.state().explorationActive,null);
+});
+
+test('full sharing ledger archives confirmed openings and retains unresolved records and old deduplication',async t=>{
+  const f=fixture(t);await f.explore.start({manual:true});f.report(f.read());f.advance(500);
+  const data=f.explore.state(),run=data.runs.at(-1);
+  data.openings=Array.from({length:118},(_,i)=>({runId:'old-'+i,mainSessionId:'main',at:1,day:'2000-01-01',status:'spoken',fingerprint:'old-fp-'+i,manual:true,sourceUrls:['https://example.invalid/private'],replyMessageId:'private-id'}));
+  data.openings.push({runId:'unresolved',mainSessionId:'main',at:2,day:'2000-01-01',status:'unknown',fingerprint:'pending',manual:true});
+  data.openings.push({runId:'last',mainSessionId:'main',at:3,day:'2000-01-01',status:'responded',fingerprint:'last-fp',manual:true});
+  f.explore.save(data);assert.equal((await f.explore.deliver()).queued,true);assert.equal(f.prompts.length,1);
+  const current=f.explore.state(),archive=f.explore.archivedOpenings();assert.ok(current.openings.length<120);assert.ok(archive.openings.some(row=>row.runId==='old-0'));assert.ok(!JSON.stringify(archive).includes('example.invalid'));assert.ok(!JSON.stringify(archive).includes('private-id'));assert.ok(current.openings.some(row=>row.runId==='unresolved'));assert.ok(current.openings.some(row=>row.runId==='last'));
+  // Even if the active row was already archived, the original run is not sent again.
+  const delivered=current.openings.find(row=>row.runId===run.id);delivered.status='spoken';archive.openings.push(delivered);fs.writeFileSync(f.explore.archiveFile(),JSON.stringify(archive));current.openings=current.openings.filter(row=>row.runId!==run.id);f.explore.save(current);
+  assert.ok((await f.explore.deliver()).skipped);assert.equal(f.prompts.length,1);
+});
+
+test('archived automatic opening still counts against today\'s sharing limit',async t=>{
+  const f=fixture(t);await f.explore.start();f.report(f.read());f.advance(500);
+  const day=new Date(f.now()).toLocaleDateString('sv-SE');
+  fs.writeFileSync(f.explore.archiveFile(),JSON.stringify({version:1,openings:[{runId:'older',mainSessionId:'main',at:f.now()-1,day,status:'spoken',manual:false,fingerprint:'different'}]}));
+  assert.match((await f.explore.deliver()).skipped,/今天已经/);assert.equal(f.prompts.length,0);
 });

@@ -16,6 +16,11 @@ function fixture(t){
   const scheduler=new Scheduler(store,host,new AbortController().signal,assistant,{probeSession:probe});
   return {root,store,assistant,known,calls,host,probe,scheduler};
 }
+test('unfinished linked-interest operation blocks creation of a replacement main',async t=>{
+  const f=fixture(t),scheduler=new Scheduler(f.store,f.host,new AbortController().signal,f.assistant,{probeSession:f.probe,getInterestPending:()=>({mainSessionId:'deleted-main'})});
+  await assert.rejects(()=>scheduler.ensureSession({recoverMissing:true}),/兴趣操作尚未完成/);
+  assert.equal(f.calls.create.length,0);assert.equal(f.store.state().sessionId,'deleted-main');assert.equal(f.store.state().sessionCreation,undefined);
+});
 test('manual recovery replaces an unavailable main exactly once without prompting or changing personal records',async t=>{
   const f=fixture(t);f.assistant.remember({text:'synthetic persistent preference',source:'test user'});fs.mkdirSync(f.store.file('workspace'),{recursive:true});fs.writeFileSync(f.store.file('workspace/note.txt'),'synthetic work');
   const [first,second]=await Promise.all([f.scheduler.ensureSession({recoverMissing:true}),f.scheduler.ensureSession({recoverMissing:true})]);

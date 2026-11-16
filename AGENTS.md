@@ -1,6 +1,9 @@
 # My Fish 项目规则
 
-先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.9.0 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
+先读 HANDOFF.md、docs/REQUIREMENTS.md 和 VALIDATION.md。当前为 **0.9.1 开发预览版**；实现、隔离验证、真实模型及长期验收分别标注。代码、测试和辅助文件只维护本项目。
+
+- 统一兴趣关联必须由用户明确选择，不按名称推断；两个存储分别保留。联动动作持久请求ID和完成回执，部分完成时冻结探索并允许原会话重试，不能单侧误报成功。残缺/跨会话冲突只允许明确解除；interest-links、interest-operation和interest-completed-archive均为私有数据。兴趣列表和话题刷新按主会话及请求代次隔离。
+- 探索与计划通过作用域 suppressRuntimeContext 抑制可选运行时上下文；宿主required上下文、系统段落和变量仍可能进入，不能声称完全隔离。缺此宿主接口时预设应安全失败。普通表单草稿仅留前端内存，按会话与工作区隔离；账号及敏感配置不写缓存。
 
 - 0.9陪伴接驳默认关闭，不自动安装或启用第三方。桌宠只锁定并broadcast已提交的main回复，不调chat/whisper或接管另一套人设；未知不重发，只释放自己的锁。浏览器朗读仅选localService=true的中文音色，无云回退、无麦克风/VAD，发新消息/输入/隐藏/失租约时取消自身队列，不声称桌宠已有音频可可靠停止。
 - assistant_video仅主会话明确开启并触发，最多180秒/12帧/2图片，原生附件render保持attachment，不把路径当图片。只有本轮真实parent/rootCallId和精确agent的进行中probe/storyboard可经过未知工具分类；禁止后台/计划直接调用视频。上游可能沿用已有Cookie/ASR，不能宣称强制匿名、已取得字幕或像素已入模。忙碌/停止未确认时拒绝迁移和换绑。

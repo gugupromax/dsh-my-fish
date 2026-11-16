@@ -10,6 +10,13 @@ function fixture(t){const root=fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-exp
 const source=(extra={})=>({id:'receipt-synthetic',platform:'bilibili',operation:'read',reference:'BV1GJ411x7h7',url:'https://www.bilibili.com/video/BV1GJ411x7h7/',title:'Synthetic title',excerpt:'Synthetic video description',scope:'Metadata only; no video viewed',truncated:false,readAt:1799999999000,...extra});
 const request=(extra={})=>({id:'synthetic-episode',runId:'synthetic-run',mainSessionId:'synthetic-main',title:'Synthetic game design',question:'Why make this choice?',thought:'Synthetic first interpretation',reason:'A specific part of the actual description',nextQuestion:'Look for another example',sources:[source()],origin:'fish',...extra});
 
+test('unrelated queries do not inject recent experiences while relevant Chinese phrases match',t=>{
+  const f=fixture(t);f.experiences.record(request({title:'火山摄影',question:'火山的颜色',thought:'岩浆很亮'}));
+  assert.deepEqual(f.experiences.context('今天的SQL怎么改','synthetic-main'),{interests:[],episodes:[]});
+  assert.equal(f.experiences.context('聊聊火山摄影','synthetic-main').interests.length,1);
+  assert.equal(f.experiences.context('','synthetic-main').interests.length,1);
+});
+
 test('empty experience reads are side-effect free and recording preserves source-backed changes without touching persona or state',t=>{
   const f=fixture(t);assert.deepEqual(f.experiences.state(),{version:1,interests:[],episodes:[],tombstones:{interestIds:[],episodeIds:[]}});assert.equal(fs.existsSync(f.experiences.file()),false);
   const result=f.experiences.record(request());assert.equal(result.episode.before,'');assert.equal(result.interest.currentThought,'Synthetic first interpretation');assert.deepEqual(result.episode.sources,[source()]);

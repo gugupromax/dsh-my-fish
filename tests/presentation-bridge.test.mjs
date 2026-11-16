@@ -42,3 +42,19 @@ test('explicit dependency check projects state keys only and never returns unrel
  const f=fixture(t,{fetchImpl:async(url,init)=>{assert.equal(init.method,'GET');assert.equal(new URL(url).pathname,'/dsh-pet-7340/state');return new Response(JSON.stringify({counter:1,pets:{main:{say:{data:{text:'private chat'}}}},sections:{balance:{data:{amount:42}},config:{data:{path:'private'}}}}));}});
  const result=await f.bridge.check();assert.equal(result.connected,true);assert.deepEqual(result.pets,[{id:'main',name:'main'}]);assert.equal(result.catalogComplete,false);assert.equal(JSON.stringify(result).includes('private'),false);assert.equal(JSON.stringify(result).includes('amount'),false);
 });
+
+test('full expression ledger archives terminal records without replaying old or uncertain deliveries',async t=>{
+ const f=fixture(t);f.bridge.saveSettings({enabled:true,mode:'browser'});
+ await f.bridge.observe({id:'main'},assistant('original'));
+ const data=f.bridge.state(),original=data.deliveries[0];
+ for(let i=1;i<4999;i++)data.deliveries.push({key:'synthetic-'+i,sessionId:'main',messageId:'s-'+i,status:'accepted',at:1});
+ data.deliveries.push({key:'unknown-key',sessionId:'main',messageId:'uncertain',status:'unknown',at:1});
+ fs.writeFileSync(f.bridge.file(),JSON.stringify(data));
+ // Simulate a crash after archive write but before removing the active row.
+ fs.writeFileSync(f.bridge.archiveFile(),JSON.stringify({version:1,deliveries:[{key:original.key,status:'accepted'}]}));
+ assert.equal((await f.bridge.observe({id:'main'},assistant('new'))).queued,true);
+ assert.ok(f.bridge.state().deliveries.length<5000);
+ assert.equal(f.bridge.archive().deliveries.filter(row=>row.key===original.key).length,1);
+ assert.equal((await f.bridge.observe({id:'main'},assistant('original'))).deduplicated,true);
+ assert.ok(f.bridge.state().deliveries.some(row=>row.key==='unknown-key')||f.bridge.archive().deliveries.some(row=>row.key==='unknown-key'));
+});

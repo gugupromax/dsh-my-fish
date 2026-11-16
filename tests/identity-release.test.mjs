@@ -74,6 +74,9 @@ test('public staging excludes runtime data and replaces stale output rather than
   write('lib/guess-game.json');write('lib/followups.json');write('lib/jokes.json');
   write('lib/experiences.json');write('lib/exploration.json');
   write('lib/integrations.json');write('lib/presentation.json');
+  write('lib/presentation-archive.json');write('lib/exploration-openings-archive.json');
+  write('lib/interest-links.json');write('lib/interest-operation.json');
+  write('lib/interest-completed-archive.json');
   assert.deepEqual(packageFiles(project).map(f=>f.split(path.sep).join('/')).sort(),['docs/README.md','lib/main.js','package.json']);
   const target=stagePackage(project);write('dist/dsh-my-fish/stale.json');stagePackage(project);
   assert.equal(fs.existsSync(path.join(target,'stale.json')),false);
@@ -86,6 +89,6 @@ test('package, lockfile and Cordis identity agree on the release name',()=>{
   const pkg=JSON.parse(fs.readFileSync(new URL('../package.json',import.meta.url),'utf8'));
   const lock=JSON.parse(fs.readFileSync(new URL('../package-lock.json',import.meta.url),'utf8'));
   assert.equal(pkg.name,'dsh-my-fish');assert.equal(lock.name,pkg.name);assert.equal(lock.packages[''].name,pkg.name);
-  assert.equal(pkg.version,'0.9.0');assert.equal(lock.version,pkg.version);assert.equal(lock.packages[''].version,pkg.version);
+  assert.equal(pkg.version,'0.9.1');assert.equal(lock.version,pkg.version);assert.equal(lock.packages[''].version,pkg.version);
   assert.match(fs.readFileSync(new URL('../cordis.patch.yml',import.meta.url),'utf8'),/id: dsh-my-fish\s+name: dsh-my-fish/);
 });
