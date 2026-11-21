@@ -63,6 +63,9 @@ try {
   const worker={id:'synthetic-native-worker',session:{id:'synthetic-native-worker',header:{cwd:temporaryRoot,sandboxMode:'read-only'}}};
   const legacy={id:'synthetic-legacy-worker',session:{id:'synthetic-legacy-worker',header:{cwd:temporaryRoot,sandboxMode:'read-only'}}};
   for(const agent of [main,worker,legacy]){
+    // DSH rc.5 tools consult the session's request context; this isolated
+    // fixture intentionally has no request context or user session data.
+    agent.session.requestContext=()=>undefined;
     const scope=createScope(ctx,agent);scopes.push(scope);agent.ctx=scope.ctx;
     disposers.push(ctx.agents.enter(agent));
   }

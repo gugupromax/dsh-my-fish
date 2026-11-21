@@ -14,7 +14,7 @@ function executable(name){
 const ffmpeg=executable('DSH_FFMPEG_PATH'),ffprobe=executable('DSH_FFPROBE_PATH');
 const installed=process.env.MY_FISH_VIDEO_PACKAGE_ROOT||path.join(os.homedir(),'.dsh','profiles','desktop','node_modules','dsh-video-storyboard');
 const packageRoot=fs.realpathSync(installed),pkg=JSON.parse(fs.readFileSync(path.join(packageRoot,'package.json'),'utf8'));
-assert.equal(pkg.name,'dsh-video-storyboard');assert.ok(['0.7.4','0.7.5'].includes(pkg.version),'This check targets the reviewed 0.7.4 and 0.7.5 contracts');
+assert.equal(pkg.name,'dsh-video-storyboard');assert.ok(['0.7.4','0.7.5','0.7.6'].includes(pkg.version),'This check targets the reviewed 0.7.4, 0.7.5 and 0.7.6 contracts');
 const relativeExport=pkg.exports?.['./pipeline'];assert.equal(typeof relativeExport,'string');
 const pipelineFile=path.resolve(packageRoot,relativeExport),inside=path.relative(packageRoot,pipelineFile);assert.ok(inside&&!inside.startsWith('..')&&!path.isAbsolute(inside));
 const temp=fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(),'my-fish-media-runtime-'))),previousFetch=globalThis.fetch;
